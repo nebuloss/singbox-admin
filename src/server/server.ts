@@ -228,16 +228,23 @@ function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase
 
   return {
     log: { level: 'warn' },
+    // Written in the older DNS form on purpose. Clients ship their own sing-box
+    // and it is rarely the newest: `type`/`domain_resolver` are 1.12 and later,
+    // and a device on 1.11 refuses the whole profile over them. This form is
+    // read by both.
     dns: {
       servers: [
         // Through the proxy, so it answers with what the tunnel can reach.
-        { type: 'udp', tag: 'remote', server: resolver ?? '1.1.1.1', detour: 'proxy' },
-        // The device's own resolver, whatever the network handed it. Used for
-        // one thing only — finding the tunnel — and it has to be this rather
-        // than a public address: a captive portal will hand you a resolver and
-        // block everything else, which is exactly where a tunnel is wanted.
-        { type: 'local', tag: 'local' },
+        { tag: 'remote', address: resolver ?? '1.1.1.1', detour: 'proxy' },
+        // The device's own resolver, whatever the network handed it — used for
+        // one thing only, finding the tunnel. It has to be this rather than a
+        // public address: a captive portal hands you a resolver and blocks the
+        // rest, which is exactly where a tunnel is wanted.
+        { tag: 'local', address: 'local' },
       ],
+      // The tunnel's own address is resolved without the tunnel. Without this
+      // the lookup needs the proxy it is trying to find, and times out.
+      rules: [{ domain: [base.host], server: 'local' }],
       final: 'remote',
     },
     inbounds: [
@@ -258,11 +265,6 @@ function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase
         uuid: user.uuid,
         tls: { enabled: true, server_name: base.host },
         transport: { type: 'ws', path: wsPath },
-        // Resolve the tunnel's own address without the tunnel. Left to the
-        // default it would ask a resolver reached through the proxy, and the
-        // proxy is what it is trying to find: the lookup times out and nothing
-        // ever connects.
-        domain_resolver: 'local',
       },
       { type: 'direct', tag: 'direct' },
     ],
@@ -273,7 +275,6 @@ function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase
         ...(internal.length ? [{ ip_cidr: internal, outbound: 'proxy' }] : []),
       ],
       final: 'proxy',
-      default_domain_resolver: { server: 'remote' },
     },
     experimental: {
       cache_file: { enabled: true },
