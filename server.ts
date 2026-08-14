@@ -581,6 +581,10 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
     const peer = ep.peers?.[0]
     if (!peer) return res.status(400).json({ error: 'tunnel sans pair' })
 
+    // Read the outbound state before touching the tag: once it changes, the
+    // existing rule points at a tag nobody defines and reads as switched off.
+    const wasOn = activeTarget(cfg) !== null
+
     ep.tag = withState(`${WG_ON}-${slug(name)}`, isEnabled(ep.tag))
     ep.address = address
     peer.address = host
@@ -591,7 +595,7 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
 
     // The tag may just have changed, and routing rules point at tags — so they
     // are rebuilt from the list rather than patched.
-    applyRouting(cfg, activeTarget(cfg) !== null)
+    applyRouting(cfg, wasOn)
 
     await commit(cfg)
     res.json({ ok: true, tag: ep.tag })
