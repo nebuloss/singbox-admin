@@ -1,4 +1,5 @@
 import { useEscapeKey } from './hooks'
+import { useT } from './i18n'
 
 /* Material 3 primitives, shared by every tab. */
 
@@ -222,6 +223,7 @@ export function Modal({
   onClose: () => void
   wide?: boolean
 }) {
+  const close = useT()('Fermer')
   useEscapeKey(onClose)
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -233,7 +235,7 @@ export function Modal({
       >
         <div className="mb-4 flex items-start justify-between gap-4">
           <h2 className="text-xl leading-7 font-normal text-on-surface">{title}</h2>
-          <IconButton label="Fermer" onClick={onClose}>
+          <IconButton label={close} onClick={onClose}>
             <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
           </IconButton>
         </div>
@@ -251,7 +253,7 @@ export function Modal({
 export function ConfirmModal({
   title,
   body,
-  confirmLabel = 'Supprimer',
+  confirmLabel,
   busy,
   onConfirm,
   onClose,
@@ -263,18 +265,19 @@ export function ConfirmModal({
   onConfirm: () => void
   onClose: () => void
 }) {
+  const t = useT()
   return (
     <Modal title={title} onClose={onClose}>
       <div className="text-sm text-on-surface-variant">{body}</div>
       <div className="mt-6 flex justify-end gap-2">
-        <TextButton onClick={onClose}>Annuler</TextButton>
+        <TextButton onClick={onClose}>{t('Annuler')}</TextButton>
         <button
           type="button"
           disabled={busy}
           onClick={onConfirm}
           className="state-layer inline-flex h-10 items-center gap-2 rounded-[var(--radius-md3-full)] bg-error px-6 text-sm font-medium text-on-error disabled:pointer-events-none disabled:opacity-38"
         >
-          {confirmLabel}
+          {confirmLabel ?? t('Supprimer')}
         </button>
       </div>
     </Modal>
@@ -326,19 +329,20 @@ export function Switch({
  * Errors *inside* a form stay inline next to the field, as in evs-app.
  */
 export function ErrorModal({ message, onClose }: { message: string; onClose: () => void }) {
+  const t = useT()
   return (
-    <Modal title="Échec de l’opération" onClose={onClose}>
+    <Modal title={t('Échec de l’opération')} onClose={onClose}>
       <div className="flex gap-4">
         <span className="grid size-10 shrink-0 place-items-center rounded-full bg-error-container text-on-error-container">
           <svg viewBox="0 0 24 24" className="size-6 fill-current" aria-hidden>
             <path d="M11 15h2v2h-2v-2zm0-8h2v6h-2V7zm1-5C6.47 2 2 6.5 2 12a10 10 0 1 0 10-10zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z" />
           </svg>
         </span>
-        <p className="min-w-0 flex-1 text-sm break-words text-on-surface-variant">{message}</p>
+        <p className="min-w-0 flex-1 text-sm break-words text-on-surface-variant">{t(message)}</p>
       </div>
       <div className="mt-6 flex justify-end">
         <FilledButton type="button" onClick={onClose}>
-          Fermer
+          {t('Fermer')}
         </FilledButton>
       </div>
     </Modal>

@@ -394,10 +394,12 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
       const p = e.peers?.[0]
       return p && p.public_key === peer.public_key && p.address === peer.address && p.port === peer.port
     })
+    // Shaped as "<message> : <detail>" like the other messages carrying a
+    // variable part, so the interface can translate the fixed half of it.
     if (same)
       return res
         .status(409)
-        .json({ error: `ce tunnel est deja configure sous le nom « ${wgName(same.tag)} »` })
+        .json({ error: `ce tunnel est deja configure sous le nom : ${wgName(same.tag)}` })
 
     cfg.endpoints = [...(cfg.endpoints ?? []), endpoint]
 

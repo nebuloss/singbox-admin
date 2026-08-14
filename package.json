@@ -5,7 +5,7 @@
   "description": "Minimal web admin for a sing-box VLESS tunnel: manage client UUIDs and hand out connection links as QR codes.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -p tsconfig.server.json && vite build",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.server.json && vite build",
     "start": "node dist-server/server.js"
   },
   "dependencies": {

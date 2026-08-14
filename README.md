@@ -106,6 +106,12 @@ Pushing a `v*` tag builds and publishes a release through GitHub Actions.
 
 The password can also be changed from the interface.
 
+## Language
+
+The interface is available in English and French. It follows the browser's
+preferred language on first visit, and the choice can be changed under
+Settings — it is remembered per browser.
+
 ## Lost password
 
 ```sh

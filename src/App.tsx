@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useHashTab } from './hooks'
+import { useI18n, useT } from './i18n'
 import {
   Banner,
   Card,
@@ -46,7 +47,7 @@ export type State = {
 export const api = async (url: string, init?: RequestInit) => {
   const r = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json' } })
   const body = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(body.error ?? `erreur ${r.status}`)
+  if (!r.ok) throw new Error(body.error ?? `erreur HTTP : ${r.status}`)
   return body
 }
 
@@ -61,6 +62,7 @@ const TAB_LABELS: Record<Tab, string> = {
 }
 
 export default function App() {
+  const t = useT()
   const [state, setState] = useState<State | null>(null)
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -110,7 +112,7 @@ export default function App() {
               <Shield className="size-8" />
             </span>
             <h1 className="text-[1.75rem] leading-9 font-normal">sing-box</h1>
-            <p className="mt-2 text-base text-on-surface-variant">Administration du tunnel</p>
+            <p className="mt-2 text-base text-on-surface-variant">{t('Administration du tunnel')}</p>
           </div>
 
           {state.setup ? (
@@ -118,17 +120,17 @@ export default function App() {
               className="flex flex-col gap-4"
               onSubmit={(e) => {
                 e.preventDefault()
-                if (password !== confirm) return setError('les deux saisies diffèrent')
+                if (password !== confirm) return setError(t('les deux saisies diffèrent'))
                 void act(() => api('/api/setup', { method: 'POST', body: JSON.stringify({ password }) }))
               }}
             >
-              <Banner>Première configuration : choisissez le mot de passe d’administration.</Banner>
-              <Field label="Mot de passe" type="password" value={password} autoFocus onChange={setPassword} />
-              <Field label="Confirmer" type="password" value={confirm} onChange={setConfirm} />
-              <p className="text-xs text-on-surface-variant">10 caractères minimum.</p>
-              {error && <Banner tone="error">{error}</Banner>}
+              <Banner>{t('Première configuration : choisissez le mot de passe d’administration.')}</Banner>
+              <Field label={t('Mot de passe')} type="password" value={password} autoFocus onChange={setPassword} />
+              <Field label={t('Confirmer')} type="password" value={confirm} onChange={setConfirm} />
+              <p className="text-xs text-on-surface-variant">{t('10 caractères minimum.')}</p>
+              {error && <Banner tone="error">{t(error)}</Banner>}
               <FilledButton disabled={busy || password.length < 10 || !confirm} className="mt-2 h-12 w-full justify-center">
-                Définir le mot de passe
+                {t('Définir le mot de passe')}
               </FilledButton>
             </form>
           ) : (
@@ -139,10 +141,10 @@ export default function App() {
                 void act(() => api('/api/login', { method: 'POST', body: JSON.stringify({ password }) }))
               }}
             >
-              <Field label="Mot de passe" type="password" value={password} autoFocus onChange={setPassword} />
-              {error && <Banner tone="error">{error}</Banner>}
+              <Field label={t('Mot de passe')} type="password" value={password} autoFocus onChange={setPassword} />
+              {error && <Banner tone="error">{t(error)}</Banner>}
               <FilledButton disabled={busy || !password} className="mt-2 h-12 w-full justify-center">
-                Se connecter
+                {t('Se connecter')}
               </FilledButton>
             </form>
           )}
@@ -163,15 +165,15 @@ export default function App() {
             </span>
             <div>
               <h1 className="text-xl leading-6 font-normal">sing-box</h1>
-              <p className="text-xs text-on-surface-variant">administration du tunnel</p>
+              <p className="text-xs text-on-surface-variant">{t('administration du tunnel')}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <span
               className={`inline-block size-2 rounded-full ${running ? 'bg-primary' : 'bg-error'}`}
-              title={running ? 'service actif' : 'service arrêté'}
+              title={running ? t('service actif') : t('service arrêté')}
             />
-            <IconButton label="Déconnexion" onClick={() => void act(() => api('/api/logout', { method: 'POST' }))}>
+            <IconButton label={t('Déconnexion')} onClick={() => void act(() => api('/api/logout', { method: 'POST' }))}>
               <path d="M10 17l5-5-5-5v3H3v4h7v3zm9-14H5a2 2 0 00-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2z" />
             </IconButton>
           </div>
@@ -179,20 +181,20 @@ export default function App() {
 
         <nav className="mx-auto max-w-3xl overflow-x-auto px-4 sm:px-6">
           <div className="flex min-w-max border-b border-outline-variant">
-            {TABS.map((t) => (
+            {TABS.map((id) => (
               <a
-                key={t}
-                href={`#${t}`}
+                key={id}
+                href={`#${id}`}
                 onClick={(e) => {
                   e.preventDefault()
-                  setTab(t)
+                  setTab(id)
                 }}
                 className={`state-layer relative px-4 py-3.5 text-sm font-medium whitespace-nowrap ${
-                  tab === t ? 'text-primary' : 'text-on-surface-variant'
+                  tab === id ? 'text-primary' : 'text-on-surface-variant'
                 }`}
               >
-                {TAB_LABELS[t]}
-                {tab === t && (
+                {t(TAB_LABELS[id])}
+                {tab === id && (
                   <span className="absolute inset-x-2 bottom-0 h-[3px] rounded-t-full bg-primary" />
                 )}
               </a>
@@ -224,15 +226,16 @@ function DevicesTab({
   busy: boolean
   act: (fn: () => Promise<unknown>) => Promise<void>
 }) {
+  const t = useT()
   const [newName, setNewName] = useState('')
   const [pending, setPending] = useState<User | null>(null)
 
   return (
     <>
       <Card className="mb-6">
-        <h2 className="mb-1 text-xl leading-7 font-normal">Ajouter un appareil</h2>
+        <h2 className="mb-1 text-xl leading-7 font-normal">{t('Ajouter un appareil')}</h2>
         <p className="mb-5 text-sm text-on-surface-variant">
-          Un identifiant unique est généré ; le retirer suffit à révoquer l’accès.
+          {t('Un identifiant unique est généré ; le retirer suffit à révoquer l’accès.')}
         </p>
         <form
           className="flex flex-wrap items-end gap-3"
@@ -245,15 +248,15 @@ function DevicesTab({
             })
           }}
         >
-          <Field label="Nom de l’appareil" value={newName} onChange={setNewName} className="min-w-56 flex-1" />
+          <Field label={t('Nom de l’appareil')} value={newName} onChange={setNewName} className="min-w-56 flex-1" />
           <FilledButton disabled={busy || !newName.trim()}>
-            <Plus /> Ajouter
+            <Plus /> {t('Ajouter')}
           </FilledButton>
         </form>
       </Card>
 
       <h2 className="mb-3 px-1 text-sm font-medium tracking-wide text-on-surface-variant uppercase">
-        Appareils · {state.users?.length ?? 0}
+        {t('Appareils')} · {state.users?.length ?? 0}
       </h2>
 
       {state.users?.length ? (
@@ -263,19 +266,18 @@ function DevicesTab({
           ))}
         </ul>
       ) : (
-        <Empty>Aucun appareil déclaré.</Empty>
+        <Empty>{t('Aucun appareil déclaré.')}</Empty>
       )}
 
       {pending && (
         <ConfirmModal
-          title="Révoquer cet appareil ?"
+          title={t('Révoquer cet appareil ?')}
           busy={busy}
-          confirmLabel="Révoquer"
+          confirmLabel={t('Révoquer')}
           body={
             <>
-              <strong className="text-on-surface">{pending.name ?? pending.uuid.slice(0, 8)}</strong> perdra
-              immédiatement l’accès au tunnel. Son lien et son QR code cesseront de fonctionner. Cette action
-              est irréversible : un nouvel identifiant sera généré si vous le rajoutez.
+              <strong className="text-on-surface">{pending.name ?? pending.uuid.slice(0, 8)}</strong>{' '}
+              {t('perdra immédiatement l’accès au tunnel. Son lien et son QR code cesseront de fonctionner. Cette action est irréversible : un nouvel identifiant sera généré si vous le rajoutez.')}
             </>
           }
           onClose={() => setPending(null)}
@@ -291,6 +293,7 @@ function DevicesTab({
 }
 
 function UserCard({ user, onRevoke }: { user: User; onRevoke: () => void }) {
+  const t = useT()
   const [copied, setCopied] = useState(false)
   return (
     <li className="overflow-hidden rounded-[var(--radius-md3-xl)] bg-surface-container">
@@ -301,11 +304,11 @@ function UserCard({ user, onRevoke }: { user: User; onRevoke: () => void }) {
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="truncate text-lg leading-6 font-medium">{user.name ?? 'sans nom'}</p>
+              <p className="truncate text-lg leading-6 font-medium">{user.name ?? t('sans nom')}</p>
               <p className="mt-0.5 font-mono text-xs text-on-surface-variant">{user.uuid.slice(0, 13)}…</p>
             </div>
             <TextButton tone="error" onClick={onRevoke}>
-              Révoquer
+              {t('Révoquer')}
             </TextButton>
           </div>
           <textarea
@@ -323,7 +326,7 @@ function UserCard({ user, onRevoke }: { user: User; onRevoke: () => void }) {
               setTimeout(() => setCopied(false), 1600)
             }}
           >
-            {copied ? 'Copié' : 'Copier le lien'}
+            {copied ? t('Copié') : t('Copier le lien')}
           </TonalButton>
         </div>
       </div>
@@ -342,6 +345,7 @@ function WireguardTab({
   busy: boolean
   act: (fn: () => Promise<unknown>) => Promise<void>
 }) {
+  const t = useT()
   const [adding, setAdding] = useState(false)
   const [pending, setPending] = useState<Profile | null>(null)
   const [name, setName] = useState('')
@@ -381,20 +385,20 @@ function WireguardTab({
       <Card className="mb-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-56 flex-1">
-            <h2 className="text-xl leading-7 font-normal">Sortie par un tunnel</h2>
+            <h2 className="text-xl leading-7 font-normal">{t('Sortie par un tunnel')}</h2>
             <p className="mt-1 text-sm text-on-surface-variant">
               {on && firstEnabled ? (
                 <>
-                  Le trafic ressort par <strong className="text-on-surface">{firstEnabled.name}</strong>, le
-                  premier tunnel actif de la liste.
+                  {t('Le trafic ressort par')} <strong className="text-on-surface">{firstEnabled.name}</strong>
+                  {t(', le premier tunnel actif de la liste.')}
                 </>
               ) : (
-                'Le trafic ressort directement par cette machine.'
+                t('Le trafic ressort directement par cette machine.')
               )}
             </p>
           </div>
           <Switch
-            label="Sortie par un tunnel"
+            label={t('Sortie par un tunnel')}
             checked={on}
             disabled={busy || (!on && !firstEnabled)}
             onChange={(v) =>
@@ -406,20 +410,20 @@ function WireguardTab({
         </div>
         {!on && !firstEnabled && profiles.length > 0 && (
           <p className="mt-4 text-xs text-on-surface-variant">
-            Activez au moins un tunnel ci-dessous pour pouvoir enclencher la sortie.
+            {t('Activez au moins un tunnel ci-dessous pour pouvoir enclencher la sortie.')}
           </p>
         )}
       </Card>
 
       <div className="mb-3 flex items-center justify-between px-1">
         <h2 className="text-sm font-medium tracking-wide text-on-surface-variant uppercase">
-          Tunnels · {profiles.length}
+          {t('Tunnels')} · {profiles.length}
           {profiles.length > 1 && (
-            <span className="ml-2 hidden font-normal normal-case sm:inline">— glissez pour réordonner</span>
+            <span className="ml-2 hidden font-normal normal-case sm:inline">{t('— glissez pour réordonner')}</span>
           )}
         </h2>
         <TonalButton onClick={() => { setFormError(''); setAdding(true) }}>
-          <Plus /> Ajouter
+          <Plus /> {t('Ajouter')}
         </TonalButton>
       </div>
 
@@ -451,7 +455,7 @@ function WireguardTab({
                   <div className="flex items-center gap-3">
                     <span
                       className="hidden cursor-grab text-on-surface-variant active:cursor-grabbing sm:block"
-                      title="Glisser pour réordonner"
+                      title={t('Glisser pour réordonner')}
                       aria-hidden
                     >
                       <svg viewBox="0 0 24 24" className="size-5 fill-current">
@@ -462,21 +466,21 @@ function WireguardTab({
                       {i + 1}
                     </span>
                     <p className="text-lg leading-6 font-medium">{p.name}</p>
-                    {serving && <Chip tone="ok">en service</Chip>}
-                    {!p.enabled && <Chip>désactivé</Chip>}
+                    {serving && <Chip tone="ok">{t('en service')}</Chip>}
+                    {!p.enabled && <Chip>{t('désactivé')}</Chip>}
                   </div>
                   <div className="flex items-center gap-1">
-                    <IconButton label="Monter" onClick={() => move(i, i - 1)}>
+                    <IconButton label={t('Monter')} onClick={() => move(i, i - 1)}>
                       <path d="M7.4 15.4 12 10.8l4.6 4.6L18 14l-6-6-6 6z" />
                     </IconButton>
-                    <IconButton label="Descendre" onClick={() => move(i, i + 1)}>
+                    <IconButton label={t('Descendre')} onClick={() => move(i, i + 1)}>
                       <path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z" />
                     </IconButton>
                     <TextButton tone="error" onClick={() => setPending(p)}>
-                      Supprimer
+                      {t('Supprimer')}
                     </TextButton>
                     <Switch
-                      label={`Activer ${p.name}`}
+                      label={`${t('Activer')} ${p.name}`}
                       checked={p.enabled}
                       disabled={busy}
                       onChange={(v) =>
@@ -492,10 +496,10 @@ function WireguardTab({
                 </div>
                 <table className="w-full text-sm">
                   <tbody>
-                    <Row label="Pair">{p.peer}</Row>
-                    <Row label="Adresse dans le tunnel">{p.address.join(', ')}</Row>
-                    <Row label="Réseaux routés">{p.allowedIps.join(', ')}</Row>
-                    <Row label="Keepalive">{p.keepalive ? `${p.keepalive} s` : '—'}</Row>
+                    <Row label={t('Pair')}>{p.peer}</Row>
+                    <Row label={t('Adresse dans le tunnel')}>{p.address.join(', ')}</Row>
+                    <Row label={t('Réseaux routés')}>{p.allowedIps.join(', ')}</Row>
+                    <Row label={t('Keepalive')}>{p.keepalive ? `${p.keepalive} s` : '—'}</Row>
                   </tbody>
                 </table>
               </li>
@@ -503,13 +507,13 @@ function WireguardTab({
           })}
         </ul>
       ) : (
-        <Empty>Aucun tunnel WireGuard.</Empty>
+        <Empty>{t('Aucun tunnel WireGuard.')}</Empty>
       )}
 
       {adding && (
-        <Modal title="Nouveau tunnel WireGuard" wide onClose={() => setAdding(false)}>
+        <Modal title={t('Nouveau tunnel WireGuard')} wide onClose={() => setAdding(false)}>
           <form className="flex flex-col gap-4" onSubmit={submit}>
-            <Field label="Nom du tunnel" value={name} onChange={setName} autoFocus />
+            <Field label={t('Nom du tunnel')} value={name} onChange={setName} autoFocus />
             <textarea
               rows={11}
               value={conf}
@@ -519,13 +523,14 @@ function WireguardTab({
               className="w-full resize-y rounded-[var(--radius-md3-m)] border border-outline bg-surface-low p-3 font-mono text-xs leading-relaxed text-on-surface outline-none focus:border-2 focus:border-primary"
             />
             <p className="text-xs text-on-surface-variant">
-              Collez la configuration fournie par votre routeur. Seuls les réseaux listés dans{' '}
-              <code>AllowedIPs</code> passeront par le tunnel ; la clé privée n’est jamais réaffichée.
+              {t('Collez la configuration fournie par votre routeur. Seuls les réseaux listés dans')}{' '}
+              <code>AllowedIPs</code>{' '}
+              {t('passeront par le tunnel ; la clé privée n’est jamais réaffichée.')}
             </p>
-            {formError && <Banner tone="error">{formError}</Banner>}
+            {formError && <Banner tone="error">{t(formError)}</Banner>}
             <div className="flex justify-end gap-2">
-              <TextButton onClick={() => setAdding(false)}>Annuler</TextButton>
-              <FilledButton disabled={!name.trim() || !conf.trim()}>Ajouter</FilledButton>
+              <TextButton onClick={() => setAdding(false)}>{t('Annuler')}</TextButton>
+              <FilledButton disabled={!name.trim() || !conf.trim()}>{t('Ajouter')}</FilledButton>
             </div>
           </form>
         </Modal>
@@ -533,16 +538,15 @@ function WireguardTab({
 
       {pending && (
         <ConfirmModal
-          title="Supprimer ce tunnel ?"
+          title={t('Supprimer ce tunnel ?')}
           busy={busy}
           body={
             <>
-              Le tunnel <strong className="text-on-surface">{pending.name}</strong> et sa clé privée seront
-              retirés de la configuration.
+              {t('Le tunnel')} <strong className="text-on-surface">{pending.name}</strong>{' '}
+              {t('et sa clé privée seront retirés de la configuration.')}
               {firstEnabled?.tag === pending.tag && on && (
                 <span className="mt-2 block">
-                  C’est celui en service : le trafic passera au tunnel actif suivant, ou ressortira
-                  directement par cette machine s’il n’en reste aucun.
+                  {t('C’est celui en service : le trafic passera au tunnel actif suivant, ou ressortira directement par cette machine s’il n’en reste aucun.')}
                 </span>
               )}
             </>
@@ -609,12 +613,13 @@ function detectPlatform(): Platform {
 }
 
 function AppsTab() {
+  const t = useT()
   const [platform, setPlatform] = useState<Platform>(detectPlatform)
   return (
     <Card>
-      <h2 className="mb-1 text-xl leading-7 font-normal">Applications clientes</h2>
+      <h2 className="mb-1 text-xl leading-7 font-normal">{t('Applications clientes')}</h2>
       <p className="mb-5 text-sm text-on-surface-variant">
-        Scannez le QR code ou collez le lien dans l’une de ces applications.
+        {t('Scannez le QR code ou collez le lien dans l’une de ces applications.')}
       </p>
 
       <div className="mb-5 -mx-1 flex overflow-x-auto px-1 pb-1">
@@ -654,7 +659,7 @@ function AppsTab() {
               </svg>
               <span className="min-w-0 flex-1">
                 <span className="block font-medium text-on-surface">{c.name}</span>
-                <span className="block text-sm text-on-surface-variant">{c.desc}</span>
+                <span className="block text-sm text-on-surface-variant">{t(c.desc)}</span>
               </span>
               <svg viewBox="0 0 24 24" className="size-5 shrink-0 fill-current text-on-surface-variant" aria-hidden>
                 <path d="M19 19H5V5h7V3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7h-2v7zM14 3v2h3.6l-9.8 9.8 1.4 1.4L19 6.4V10h2V3h-7z" />
@@ -670,6 +675,7 @@ function AppsTab() {
 /* ── Paramètres ──────────────────────────────────────────────────────────── */
 
 function SettingsTab({ state }: { state: State }) {
+  const { t, lang, setLang } = useI18n()
   const [open, setOpen] = useState(false)
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
@@ -681,7 +687,7 @@ function SettingsTab({ state }: { state: State }) {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    if (next !== confirm) return setError('les deux saisies diffèrent')
+    if (next !== confirm) return setError(t('les deux saisies diffèrent'))
     setBusy(true)
     try {
       await api('/api/password', { method: 'POST', body: JSON.stringify({ current, next }) })
@@ -699,44 +705,67 @@ function SettingsTab({ state }: { state: State }) {
   return (
     <>
       <Card className="mb-6">
-        <h2 className="mb-4 text-xl leading-7 font-normal">Service</h2>
+        <h2 className="mb-4 text-xl leading-7 font-normal">{t('Service')}</h2>
         <table className="w-full text-sm">
           <tbody>
-            <Row label="État">{state.service?.running ? 'actif' : 'arrêté'}</Row>
-            <Row label="Version">{state.service?.version}</Row>
-            <Row label="Nom public">
+            <Row label={t('État')}>{state.service?.running ? t('actif') : t('arrêté')}</Row>
+            <Row label={t('Version')}>{state.service?.version}</Row>
+            <Row label={t('Nom public')}>
               {state.tunnel?.host}:{state.tunnel?.port}
             </Row>
-            <Row label="Chemin WebSocket">{state.tunnel?.path}</Row>
+            <Row label={t('Chemin WebSocket')}>{state.tunnel?.path}</Row>
           </tbody>
         </table>
+      </Card>
+
+      <Card className="mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl leading-7 font-normal">{t('Langue')}</h2>
+            <p className="mt-1 text-sm text-on-surface-variant">{t('Langue de l’interface.')}</p>
+          </div>
+          <div className="inline-flex rounded-[var(--radius-md3-full)] border border-outline">
+            {(['fr', 'en'] as const).map((l, i) => (
+              <button
+                key={l}
+                type="button"
+                onClick={() => setLang(l)}
+                className={`state-layer h-10 px-5 text-sm font-medium ${
+                  lang === l ? 'bg-secondary-container text-on-secondary-container' : 'text-on-surface-variant'
+                } ${i === 0 ? 'rounded-l-[var(--radius-md3-full)]' : 'border-l border-outline rounded-r-[var(--radius-md3-full)]'}`}
+              >
+                {l === 'fr' ? t('Français') : t('Anglais')}
+              </button>
+            ))}
+          </div>
+        </div>
       </Card>
 
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-xl leading-7 font-normal">Mot de passe</h2>
+            <h2 className="text-xl leading-7 font-normal">{t('Mot de passe')}</h2>
             <p className="mt-1 text-sm text-on-surface-variant">
-              {done ? 'Modifié — les autres sessions ont été fermées.' : 'Accès à cette interface.'}
+              {done ? t('Modifié — les autres sessions ont été fermées.') : t('Accès à cette interface.')}
             </p>
           </div>
-          <TonalButton onClick={() => { setError(''); setOpen(true) }}>Changer</TonalButton>
+          <TonalButton onClick={() => { setError(''); setOpen(true) }}>{t('Changer')}</TonalButton>
         </div>
       </Card>
 
       {open && (
-        <Modal title="Changer le mot de passe" onClose={() => setOpen(false)}>
+        <Modal title={t('Changer le mot de passe')} onClose={() => setOpen(false)}>
           <form className="flex flex-col gap-4" onSubmit={submit}>
-            <Field label="Mot de passe actuel" type="password" value={current} onChange={setCurrent} autoFocus />
-            <Field label="Nouveau mot de passe" type="password" value={next} onChange={setNext} />
-            <Field label="Confirmer" type="password" value={confirm} onChange={setConfirm} />
+            <Field label={t('Mot de passe actuel')} type="password" value={current} onChange={setCurrent} autoFocus />
+            <Field label={t('Nouveau mot de passe')} type="password" value={next} onChange={setNext} />
+            <Field label={t('Confirmer')} type="password" value={confirm} onChange={setConfirm} />
             <p className="text-xs text-on-surface-variant">
-              10 caractères minimum. Les autres sessions seront fermées.
+              {t('10 caractères minimum. Les autres sessions seront fermées.')}
             </p>
-            {error && <Banner tone="error">{error}</Banner>}
+            {error && <Banner tone="error">{t(error)}</Banner>}
             <div className="flex justify-end gap-2">
-              <TextButton onClick={() => setOpen(false)}>Annuler</TextButton>
-              <FilledButton disabled={busy || !current || !next || !confirm}>Enregistrer</FilledButton>
+              <TextButton onClick={() => setOpen(false)}>{t('Annuler')}</TextButton>
+              <FilledButton disabled={busy || !current || !next || !confirm}>{t('Enregistrer')}</FilledButton>
             </div>
           </form>
         </Modal>
