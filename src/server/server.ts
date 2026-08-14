@@ -120,16 +120,14 @@ function readConfig(): Config {
 const PARKED = 'vless-suspended'
 
 /**
- * One rule decides every path on the public name: a path shaped like a UUID is
- * a device asking for its profile; anything else belongs to the tunnel.
+ * Every address reachable from outside has the same shape: `/<identifier>`.
+ * A device fetching its profile and a client opening the tunnel are told apart
+ * by the WebSocket upgrade, not by the path — so from the outside there is
+ * nothing to sort them by.
  *
- * That is all the reverse proxy is ever told — a shape, not a secret. The
- * tunnel's own path stays unknown to it, which is what lets this app rewrite
- * that path without anyone else having to hear about it. And there is no
- * agreed-upon prefix to keep in step on both sides.
- *
- * The two can never collide: a generated tunnel path is hex without dashes and
- * a different length, so it cannot be mistaken for an identifier.
+ * The proxy is told that rule and nothing else: a shape and a header, never a
+ * secret. Which identifier is the tunnel stays this app's business, which is
+ * what lets it be rewritten without anyone else hearing about it.
  */
 const UUID_PATH = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
 
@@ -303,19 +301,26 @@ function proxySnippet(cfg: Config, appPort: number): string {
     '  try_files /index.html =404;',
     '}',
     '',
-    "# Un chemin en forme d'UUID est un appareil qui demande son profil.",
+    '# Une adresse en forme d identifiant : le tunnel si la requete demande un',
+    '# upgrade WebSocket, sinon un appareil qui vient chercher son profil.',
     `location ~ "^/${UUID_PATH}$" {`,
-    `  proxy_pass http://${host}:${appPort};`,
+    `  set $backend ${host}:${appPort};`,
+    `  if ($http_upgrade ~* websocket) { set $backend ${host}:${singbox}; }`,
+    '  proxy_pass http://$backend;',
     '  proxy_set_header Host $host;',
     '  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
     '  proxy_set_header X-Forwarded-Proto $scheme;',
+    '  proxy_set_header Upgrade $http_upgrade;',
+    '  proxy_set_header Connection $http_connection;',
+    '  proxy_http_version 1.1;',
+    '  proxy_read_timeout 86400s;',
+    '  proxy_send_timeout 86400s;',
     '  proxy_intercept_errors on;',
     '  error_page 400 401 403 404 500 502 503 504 = @couverture;',
     '}',
     '',
-    '# Tout le reste va a sing-box, qui ne repond qu au chemin secret avec un',
-    "# upgrade WebSocket. Le proxy n'a pas a connaitre ce chemin : les autres",
-    '# cas sont rattrapes et rendus sous la page de couverture, en 200.',
+    '# Tout le reste va a sing-box : les chemins de tunnel plus anciens, qui',
+    '# ne sont pas des identifiants. Les refus sont rattrapes comme le reste.',
     'location / {',
     `  proxy_pass http://${host}:${singbox};`,
     '  proxy_set_header Host $host;',
@@ -833,7 +838,10 @@ app.post('/api/tunnel/path', requireAuth, async (req, res) => {
     if (!inbound.transport || inbound.transport.type !== 'ws')
       return res.status(400).json({ error: 'l inbound n utilise pas un transport ws' })
 
-    inbound.transport.path = `/${crypto.randomBytes(12).toString('hex')}`
+    // Shaped like every other reachable address: from outside, a profile and
+    // the tunnel are both /<identifier>, and only the WebSocket upgrade tells
+    // them apart. Nothing on the outside can sort one from the other by looking.
+    inbound.transport.path = `/${crypto.randomUUID()}`
     await commit(cfg)
     res.json({ ok: true, path: inbound.transport.path })
   } catch (e) {
