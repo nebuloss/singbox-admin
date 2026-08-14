@@ -1,7 +1,24 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useHashTab } from './hooks'
+import {
+  Banner,
+  Card,
+  Chip,
+  ConfirmModal,
+  Empty,
+  Field,
+  FilledButton,
+  IconButton,
+  Modal,
+  Row,
+  TextButton,
+  TonalButton,
+} from './ui'
 
-type User = { uuid: string; name?: string; link: string; qr: string }
-type Wireguard = {
+export type User = { uuid: string; name?: string; link: string; qr: string }
+export type Profile = {
+  tag: string
+  name: string
   address: string[]
   peer: string | null
   publicKey: string | null
@@ -9,29 +26,45 @@ type Wireguard = {
   keepalive: number | null
   presharedKey: boolean
 }
-type State = {
+export type Wireguard = {
+  profiles: Profile[]
+  active: string | null
+  failover: boolean
+  failoverMembers: string[]
+}
+export type State = {
   authed: boolean
   setup?: boolean
   users?: User[]
   service?: { running: boolean; version: string }
   tunnel?: { host: string; port: number; path: string }
-  wireguard?: Wireguard | null
+  wireguard?: Wireguard
 }
 
-const api = async (url: string, init?: RequestInit) => {
+export const api = async (url: string, init?: RequestInit) => {
   const r = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json' } })
   const body = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error(body.error ?? `erreur ${r.status}`)
   return body
 }
 
+const TABS = ['appareils', 'wireguard', 'applications', 'parametres'] as const
+type Tab = (typeof TABS)[number]
+
+const TAB_LABELS: Record<Tab, string> = {
+  appareils: 'Appareils',
+  wireguard: 'WireGuard',
+  applications: 'Applications',
+  parametres: 'Paramètres',
+}
+
 export default function App() {
   const [state, setState] = useState<State | null>(null)
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
-  const [newName, setNewName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [tab, setTab] = useHashTab<Tab>(TABS, 'appareils')
 
   const refresh = useCallback(async () => {
     try {
@@ -67,51 +100,32 @@ export default function App() {
   }
 
   if (!state.authed) {
-    // Dedicated full-screen layout: no app bar, nothing to navigate to yet.
     return (
       <div className="grid min-h-screen place-items-center bg-surface px-6 py-10 text-on-surface">
         <div className="w-full max-w-[26rem]">
           <div className="mb-10 flex flex-col items-center text-center">
             <span className="mb-6 grid size-16 place-items-center rounded-[var(--radius-md3-l)] bg-primary-container text-on-primary-container">
-              <svg viewBox="0 0 24 24" className="size-8 fill-current" aria-hidden>
-                <path d="M12 2L4 6v6c0 5 3.4 9.4 8 10 4.6-.6 8-5 8-10V6l-8-4zm0 5a2.5 2.5 0 110 5 2.5 2.5 0 010-5zm0 11c-1.7 0-3.2-.9-4-2.2.1-1.3 2.7-2 4-2s3.9.7 4 2A4.7 4.7 0 0112 18z" />
-              </svg>
+              <Shield className="size-8" />
             </span>
             <h1 className="text-[1.75rem] leading-9 font-normal">sing-box</h1>
             <p className="mt-2 text-base text-on-surface-variant">Administration du tunnel</p>
           </div>
 
           {state.setup ? (
-            // First run: no password is set yet, so we ask for one instead of
-            // refusing access. Whoever reaches the app first claims it — hence
-            // the warning, and hence resetting requires root on the host.
             <form
               className="flex flex-col gap-4"
               onSubmit={(e) => {
                 e.preventDefault()
                 if (password !== confirm) return setError('les deux saisies diffèrent')
-                void act(() =>
-                  api('/api/setup', { method: 'POST', body: JSON.stringify({ password }) }),
-                )
+                void act(() => api('/api/setup', { method: 'POST', body: JSON.stringify({ password }) }))
               }}
             >
-              <Banner>
-                Première configuration : choisissez le mot de passe d’administration.
-              </Banner>
-              <Field
-                label="Mot de passe"
-                type="password"
-                value={password}
-                autoFocus
-                onChange={setPassword}
-              />
+              <Banner>Première configuration : choisissez le mot de passe d’administration.</Banner>
+              <Field label="Mot de passe" type="password" value={password} autoFocus onChange={setPassword} />
               <Field label="Confirmer" type="password" value={confirm} onChange={setConfirm} />
               <p className="text-xs text-on-surface-variant">10 caractères minimum.</p>
               {error && <Banner tone="error">{error}</Banner>}
-              <FilledButton
-                disabled={busy || password.length < 10 || !confirm}
-                className="mt-2 h-12 w-full justify-center"
-              >
+              <FilledButton disabled={busy || password.length < 10 || !confirm} className="mt-2 h-12 w-full justify-center">
                 Définir le mot de passe
               </FilledButton>
             </form>
@@ -120,18 +134,10 @@ export default function App() {
               className="flex flex-col gap-4"
               onSubmit={(e) => {
                 e.preventDefault()
-                void act(() =>
-                  api('/api/login', { method: 'POST', body: JSON.stringify({ password }) }),
-                )
+                void act(() => api('/api/login', { method: 'POST', body: JSON.stringify({ password }) }))
               }}
             >
-              <Field
-                label="Mot de passe"
-                type="password"
-                value={password}
-                autoFocus
-                onChange={setPassword}
-              />
+              <Field label="Mot de passe" type="password" value={password} autoFocus onChange={setPassword} />
               {error && <Banner tone="error">{error}</Banner>}
               <FilledButton disabled={busy || !password} className="mt-2 h-12 w-full justify-center">
                 Se connecter
@@ -146,33 +152,89 @@ export default function App() {
   const running = state.service?.running
 
   return (
-    <Shell
-      trailing={
-        <IconButton
-          label="Déconnexion"
-          onClick={() => void act(() => api('/api/logout', { method: 'POST' }))}
-        >
-          <path d="M10 17l5-5-5-5v3H3v4h7v3zm9-14H5a2 2 0 00-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2z" />
-        </IconButton>
-      }
-    >
-      <div className="mb-6 flex flex-wrap items-center gap-2">
-        <Chip tone={running ? 'ok' : 'error'}>
-          <span
-            className={`size-2 rounded-full ${running ? 'bg-on-secondary-container' : 'bg-on-error-container'}`}
-          />
-          {running ? 'Service actif' : 'Service arrêté'}
-        </Chip>
-        {state.service?.version && <Chip>{state.service.version}</Chip>}
-        <Chip>
-          {state.tunnel?.host}:{state.tunnel?.port}
-        </Chip>
-      </div>
+    <div className="min-h-screen bg-surface text-on-surface">
+      <header className="sticky top-0 z-10 bg-surface/85 backdrop-blur-md">
+        <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 pt-4 sm:px-6">
+          <div className="flex items-center gap-3">
+            <span className="grid size-10 place-items-center rounded-[var(--radius-md3-m)] bg-primary-container text-on-primary-container">
+              <Shield className="size-5" />
+            </span>
+            <div>
+              <h1 className="text-xl leading-6 font-normal">sing-box</h1>
+              <p className="text-xs text-on-surface-variant">administration du tunnel</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-block size-2 rounded-full ${running ? 'bg-primary' : 'bg-error'}`}
+              title={running ? 'service actif' : 'service arrêté'}
+            />
+            <IconButton label="Déconnexion" onClick={() => void act(() => api('/api/logout', { method: 'POST' }))}>
+              <path d="M10 17l5-5-5-5v3H3v4h7v3zm9-14H5a2 2 0 00-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2z" />
+            </IconButton>
+          </div>
+        </div>
 
+        <nav className="mx-auto max-w-3xl overflow-x-auto px-4 sm:px-6">
+          <div className="flex min-w-max border-b border-outline-variant">
+            {TABS.map((t) => (
+              <a
+                key={t}
+                href={`#${t}`}
+                onClick={(e) => {
+                  e.preventDefault()
+                  setTab(t)
+                }}
+                className={`state-layer relative px-4 py-3.5 text-sm font-medium whitespace-nowrap ${
+                  tab === t ? 'text-primary' : 'text-on-surface-variant'
+                }`}
+              >
+                {TAB_LABELS[t]}
+                {tab === t && (
+                  <span className="absolute inset-x-2 bottom-0 h-[3px] rounded-t-full bg-primary" />
+                )}
+              </a>
+            ))}
+          </div>
+        </nav>
+      </header>
+
+      <main className="mx-auto max-w-3xl px-4 pt-6 pb-16 sm:px-6">
+        {error && (
+          <Banner tone="error" className="mb-6">
+            {error}
+          </Banner>
+        )}
+
+        {tab === 'appareils' && <DevicesTab state={state} busy={busy} act={act} />}
+        {tab === 'wireguard' && <WireguardTab wg={state.wireguard} busy={busy} act={act} />}
+        {tab === 'applications' && <AppsTab />}
+        {tab === 'parametres' && <SettingsTab state={state} />}
+      </main>
+    </div>
+  )
+}
+
+/* ── Appareils ───────────────────────────────────────────────────────────── */
+
+function DevicesTab({
+  state,
+  busy,
+  act,
+}: {
+  state: State
+  busy: boolean
+  act: (fn: () => Promise<unknown>) => Promise<void>
+}) {
+  const [newName, setNewName] = useState('')
+  const [pending, setPending] = useState<User | null>(null)
+
+  return (
+    <>
       <Card className="mb-6">
-        <h2 className="mb-1 text-xl leading-7 font-normal text-on-surface">Ajouter un appareil</h2>
+        <h2 className="mb-1 text-xl leading-7 font-normal">Ajouter un appareil</h2>
         <p className="mb-5 text-sm text-on-surface-variant">
-          Un identifiant unique est généré ; le retirer suffit à révoquer l'accès.
+          Un identifiant unique est généré ; le retirer suffit à révoquer l’accès.
         </p>
         <form
           className="flex flex-wrap items-end gap-3"
@@ -185,84 +247,69 @@ export default function App() {
             })
           }}
         >
-          <Field
-            label="Nom de l'appareil"
-            value={newName}
-            onChange={setNewName}
-            className="min-w-56 flex-1"
-          />
+          <Field label="Nom de l’appareil" value={newName} onChange={setNewName} className="min-w-56 flex-1" />
           <FilledButton disabled={busy || !newName.trim()}>
-            <svg viewBox="0 0 24 24" className="size-[18px] fill-current" aria-hidden>
-              <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
-            </svg>
-            Ajouter
+            <Plus /> Ajouter
           </FilledButton>
         </form>
       </Card>
-
-      {error && (
-        <Banner tone="error" className="mb-6">
-          {error}
-        </Banner>
-      )}
 
       <h2 className="mb-3 px-1 text-sm font-medium tracking-wide text-on-surface-variant uppercase">
         Appareils · {state.users?.length ?? 0}
       </h2>
 
-      <ul className="flex flex-col gap-4">
-        {state.users?.map((u) => (
-          <UserCard
-            key={u.uuid}
-            user={u}
-            busy={busy}
-            onDelete={() => void act(() => api(`/api/users/${u.uuid}`, { method: 'DELETE' }))}
-          />
-        ))}
-      </ul>
+      {state.users?.length ? (
+        <ul className="flex flex-col gap-4">
+          {state.users.map((u) => (
+            <UserCard key={u.uuid} user={u} onRevoke={() => setPending(u)} />
+          ))}
+        </ul>
+      ) : (
+        <Empty>Aucun appareil déclaré.</Empty>
+      )}
 
-      <WireguardCard wg={state.wireguard} onChange={() => void refresh()} />
-      <Clients />
-      <PasswordCard />
-    </Shell>
+      {pending && (
+        <ConfirmModal
+          title="Révoquer cet appareil ?"
+          busy={busy}
+          confirmLabel="Révoquer"
+          body={
+            <>
+              <strong className="text-on-surface">{pending.name ?? pending.uuid.slice(0, 8)}</strong> perdra
+              immédiatement l’accès au tunnel. Son lien et son QR code cesseront de fonctionner. Cette action
+              est irréversible : un nouvel identifiant sera généré si vous le rajoutez.
+            </>
+          }
+          onClose={() => setPending(null)}
+          onConfirm={() => {
+            const uuid = pending.uuid
+            setPending(null)
+            void act(() => api(`/api/users/${uuid}`, { method: 'DELETE' }))
+          }}
+        />
+      )}
+    </>
   )
 }
 
-function UserCard({ user, busy, onDelete }: { user: User; busy: boolean; onDelete: () => void }) {
+function UserCard({ user, onRevoke }: { user: User; onRevoke: () => void }) {
   const [copied, setCopied] = useState(false)
-  const [confirming, setConfirming] = useState(false)
-
   return (
     <li className="overflow-hidden rounded-[var(--radius-md3-xl)] bg-surface-container">
       <div className="flex flex-col gap-5 p-5 sm:flex-row">
-        <div className="mx-auto size-32 shrink-0 rounded-[var(--radius-md3-m)] bg-white p-2 sm:mx-0 [&>svg]:size-full">
+        <div className="mx-auto size-32 shrink-0 rounded-[var(--radius-md3-m)] bg-white p-2 sm:mx-0 [&>div>svg]:size-full">
           <div dangerouslySetInnerHTML={{ __html: user.qr }} />
         </div>
-
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="truncate text-lg leading-6 font-medium text-on-surface">
-                {user.name ?? 'sans nom'}
-              </p>
-              <p className="mt-0.5 font-mono text-xs text-on-surface-variant">
-                {user.uuid.slice(0, 13)}…
-              </p>
+              <p className="truncate text-lg leading-6 font-medium">{user.name ?? 'sans nom'}</p>
+              <p className="mt-0.5 font-mono text-xs text-on-surface-variant">{user.uuid.slice(0, 13)}…</p>
             </div>
-            {confirming ? (
-              <div className="flex shrink-0 gap-1">
-                <TextButton tone="error" disabled={busy} onClick={onDelete}>
-                  Confirmer
-                </TextButton>
-                <TextButton onClick={() => setConfirming(false)}>Annuler</TextButton>
-              </div>
-            ) : (
-              <TextButton tone="error" onClick={() => setConfirming(true)}>
-                Révoquer
-              </TextButton>
-            )}
+            <TextButton tone="error" onClick={onRevoke}>
+              Révoquer
+            </TextButton>
           </div>
-
           <textarea
             readOnly
             rows={3}
@@ -270,7 +317,6 @@ function UserCard({ user, busy, onDelete }: { user: User; busy: boolean; onDelet
             onClick={(e) => e.currentTarget.select()}
             className="w-full resize-none rounded-[var(--radius-md3-m)] bg-surface-low p-3 font-mono text-[11px] leading-relaxed break-all text-on-surface-variant outline-none focus:ring-2 focus:ring-primary"
           />
-
           <TonalButton
             className="self-start"
             onClick={() => {
@@ -279,13 +325,6 @@ function UserCard({ user, busy, onDelete }: { user: User; busy: boolean; onDelet
               setTimeout(() => setCopied(false), 1600)
             }}
           >
-            <svg viewBox="0 0 24 24" className="size-[18px] fill-current" aria-hidden>
-              {copied ? (
-                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
-              ) : (
-                <path d="M16 1H4a2 2 0 00-2 2v14h2V3h12V1zm3 4H8a2 2 0 00-2 2v14a2 2 0 002 2h11a2 2 0 002-2V7a2 2 0 00-2-2zm0 16H8V7h11v14z" />
-              )}
-            </svg>
             {copied ? 'Copié' : 'Copier le lien'}
           </TonalButton>
         </div>
@@ -296,201 +335,217 @@ function UserCard({ user, busy, onDelete }: { user: User; busy: boolean; onDelet
 
 /* ── WireGuard ───────────────────────────────────────────────────────────── */
 
-function WireguardCard({ wg, onChange }: { wg: Wireguard | null | undefined; onChange: () => void }) {
-  const [open, setOpen] = useState(false)
+function WireguardTab({
+  wg,
+  busy,
+  act,
+}: {
+  wg: Wireguard | undefined
+  busy: boolean
+  act: (fn: () => Promise<unknown>) => Promise<void>
+}) {
+  const [adding, setAdding] = useState(false)
+  const [pending, setPending] = useState<Profile | null>(null)
+  const [name, setName] = useState('')
   const [conf, setConf] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const [confirming, setConfirming] = useState(false)
+  const [formError, setFormError] = useState('')
+
+  const profiles = wg?.profiles ?? []
+  const members = wg?.failoverMembers ?? []
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setBusy(true)
-    setError('')
+    setFormError('')
     try {
-      await api('/api/wireguard', { method: 'POST', body: JSON.stringify({ config: conf }) })
+      await api('/api/wireguard', { method: 'POST', body: JSON.stringify({ name, config: conf }) })
+      setName('')
       setConf('')
-      setOpen(false)
-      onChange()
+      setAdding(false)
+      await act(async () => {})
     } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
+      setFormError((err as Error).message)
     }
   }
 
-  const remove = async () => {
-    setBusy(true)
-    setError('')
-    try {
-      await api('/api/wireguard', { method: 'DELETE' })
-      setConfirming(false)
-      onChange()
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
+  const toggleMember = (tag: string) => {
+    const next = members.includes(tag) ? members.filter((t) => t !== tag) : [...members, tag]
+    if (next.length < 2) return
+    void act(() =>
+      api('/api/wireguard/active', { method: 'POST', body: JSON.stringify({ failover: true, members: next }) }),
+    )
   }
 
   return (
-    <Card className="mt-8">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-xl leading-7 font-normal text-on-surface">Sortie WireGuard</h2>
-          <p className="mt-1 text-sm text-on-surface-variant">
-            {wg
-              ? 'Le trafic des appareils ressort par ce tunnel.'
-              : 'Optionnel : faire ressortir le trafic par un tunnel WireGuard existant.'}
-          </p>
-        </div>
-        {!open && (
-          <TonalButton onClick={() => { setError(''); setOpen(true) }}>
-            {wg ? 'Remplacer' : 'Configurer'}
+    <>
+      <Card className="mb-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl leading-7 font-normal">Sortie du trafic</h2>
+            <p className="mt-1 text-sm text-on-surface-variant">
+              {profiles.length
+                ? 'Choisissez par quel tunnel le trafic des appareils ressort.'
+                : 'Sans profil, le trafic sort directement par cette machine.'}
+            </p>
+          </div>
+          <TonalButton onClick={() => { setFormError(''); setAdding(true) }}>
+            <Plus /> Ajouter un profil
           </TonalButton>
-        )}
-      </div>
+        </div>
 
-      {wg && !open && (
-        <div className="mt-5 flex flex-col gap-3">
-          <table className="w-full text-sm">
-            <tbody>
-              <Row label="Pair">{wg.peer}</Row>
-              <Row label="Adresse dans le tunnel">{wg.address.join(', ')}</Row>
-              <Row label="Réseaux routés">{wg.allowedIps.join(', ')}</Row>
-              <Row label="Keepalive">{wg.keepalive ? `${wg.keepalive} s` : '—'}</Row>
-              <Row label="Clé partagée">{wg.presharedKey ? 'oui' : 'non'}</Row>
-            </tbody>
-          </table>
-          <div className="flex justify-end">
-            {confirming ? (
-              <span className="flex gap-1">
-                <TextButton tone="error" disabled={busy} onClick={remove}>
-                  Confirmer la suppression
-                </TextButton>
-                <TextButton onClick={() => setConfirming(false)}>Annuler</TextButton>
+        {profiles.length > 1 && (
+          <div className="mt-5 rounded-[var(--radius-md3-m)] bg-surface-low p-4">
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={Boolean(wg?.failover)}
+                disabled={busy}
+                onChange={(e) => {
+                  const on = e.target.checked
+                  void act(() =>
+                    api('/api/wireguard/active', {
+                      method: 'POST',
+                      body: JSON.stringify(
+                        on
+                          ? { failover: true, members: profiles.slice(0, 2).map((p) => p.tag) }
+                          : { tag: profiles[0].tag },
+                      ),
+                    }),
+                  )
+                }}
+                className="mt-1 size-4 accent-[var(--color-primary)]"
+              />
+              <span className="text-sm">
+                <span className="font-medium">Bascule automatique</span>
+                <span className="block text-on-surface-variant">
+                  sing-box teste les profils sélectionnés et utilise celui qui répond. Le trafic repart par un
+                  autre tunnel si l’actif cesse de fonctionner.
+                </span>
               </span>
-            ) : (
-              <TextButton tone="error" onClick={() => setConfirming(true)}>
-                Supprimer le tunnel
-              </TextButton>
+            </label>
+
+            {wg?.failover && (
+              <div className="mt-4 flex flex-wrap gap-2 pl-7">
+                {profiles.map((p) => (
+                  <Chip key={p.tag} selected={members.includes(p.tag)} onClick={() => toggleMember(p.tag)}>
+                    {members.includes(p.tag) && <Check />}
+                    {p.name}
+                  </Chip>
+                ))}
+              </div>
             )}
           </div>
-        </div>
-      )}
-
-      {open && (
-        <form className="mt-5 flex flex-col gap-3" onSubmit={submit}>
-          <p className="text-sm text-on-surface-variant">
-            Collez la configuration WireGuard fournie par votre routeur ou votre fournisseur.
-          </p>
-          <textarea
-            autoFocus
-            rows={11}
-            value={conf}
-            onChange={(e) => setConf(e.target.value)}
-            spellCheck={false}
-            placeholder={'[Interface]\nPrivateKey = …\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = …\nAllowedIPs = 10.0.0.0/8\nEndpoint = vpn.example.com:51820'}
-            className="w-full resize-y rounded-[var(--radius-md3-m)] border border-outline bg-surface-low p-3 font-mono text-xs leading-relaxed text-on-surface outline-none focus:border-2 focus:border-primary"
-          />
-          <p className="text-xs text-on-surface-variant">
-            Seuls les réseaux listés dans <code>AllowedIPs</code> passeront par le tunnel. La clé
-            privée est stockée dans la configuration de sing-box et n’est jamais réaffichée.
-          </p>
-          {error && <Banner tone="error">{error}</Banner>}
-          <div className="flex justify-end gap-2">
-            <TextButton onClick={() => setOpen(false)}>Annuler</TextButton>
-            <FilledButton disabled={busy || !conf.trim()}>Appliquer</FilledButton>
-          </div>
-        </form>
-      )}
-
-      {error && !open && <Banner tone="error" className="mt-4">{error}</Banner>}
-    </Card>
-  )
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <tr>
-      <td className="py-1 pr-4 align-top whitespace-nowrap text-on-surface-variant">{label}</td>
-      <td className="py-1 font-mono text-xs break-all">{children}</td>
-    </tr>
-  )
-}
-
-/* ── Password ────────────────────────────────────────────────────────────── */
-
-function PasswordCard() {
-  const [open, setOpen] = useState(false)
-  const [current, setCurrent] = useState('')
-  const [next, setNext] = useState('')
-  const [confirm, setConfirm] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const [done, setDone] = useState(false)
-
-  const reset = () => {
-    setCurrent(''); setNext(''); setConfirm(''); setError('')
-  }
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-    if (next !== confirm) return setError('les deux saisies diffèrent')
-    setBusy(true)
-    try {
-      await api('/api/password', { method: 'POST', body: JSON.stringify({ current, next }) })
-      reset()
-      setOpen(false)
-      setDone(true)
-      setTimeout(() => setDone(false), 4000)
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Card className="mt-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl leading-7 font-normal text-on-surface">Mot de passe</h2>
-          <p className="mt-1 text-sm text-on-surface-variant">
-            {done ? 'Modifié — les autres sessions ont été fermées.' : 'Accès à cette interface d’administration.'}
-          </p>
-        </div>
-        {!open && (
-          <TonalButton
-            onClick={() => {
-              reset()
-              setOpen(true)
-            }}
-          >
-            Changer
-          </TonalButton>
         )}
-      </div>
+      </Card>
 
-      {open && (
-        <form className="mt-6 flex flex-col gap-4" onSubmit={submit}>
-          <Field label="Mot de passe actuel" type="password" value={current} onChange={setCurrent} autoFocus />
-          <Field label="Nouveau mot de passe" type="password" value={next} onChange={setNext} />
-          <Field label="Confirmer" type="password" value={confirm} onChange={setConfirm} />
-          <p className="text-xs text-on-surface-variant">10 caractères minimum.</p>
-          {error && <Banner tone="error">{error}</Banner>}
-          <div className="flex justify-end gap-2">
-            <TextButton onClick={() => setOpen(false)}>Annuler</TextButton>
-            <FilledButton disabled={busy || !current || !next || !confirm}>Enregistrer</FilledButton>
-          </div>
-        </form>
+      {profiles.length ? (
+        <ul className="flex flex-col gap-4">
+          {profiles.map((p) => {
+            const active = !wg?.failover && wg?.active === p.tag
+            const inGroup = Boolean(wg?.failover) && members.includes(p.tag)
+            return (
+              <li
+                key={p.tag}
+                className={`rounded-[var(--radius-md3-xl)] p-5 ${
+                  active || inGroup ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container'
+                }`}
+              >
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <p className="text-lg leading-6 font-medium">{p.name}</p>
+                    {active && <Chip tone="ok">actif</Chip>}
+                    {inGroup && <Chip tone="ok">dans le groupe</Chip>}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {!active && !wg?.failover && (
+                      <TextButton
+                        disabled={busy}
+                        onClick={() =>
+                          void act(() =>
+                            api('/api/wireguard/active', {
+                              method: 'POST',
+                              body: JSON.stringify({ tag: p.tag }),
+                            }),
+                          )
+                        }
+                      >
+                        Activer
+                      </TextButton>
+                    )}
+                    <TextButton tone="error" onClick={() => setPending(p)}>
+                      Supprimer
+                    </TextButton>
+                  </div>
+                </div>
+                <table className="w-full text-sm">
+                  <tbody>
+                    <Row label="Pair">{p.peer}</Row>
+                    <Row label="Adresse dans le tunnel">{p.address.join(', ')}</Row>
+                    <Row label="Réseaux routés">{p.allowedIps.join(', ')}</Row>
+                    <Row label="Keepalive">{p.keepalive ? `${p.keepalive} s` : '—'}</Row>
+                  </tbody>
+                </table>
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <Empty>Aucun profil WireGuard.</Empty>
       )}
-    </Card>
+
+      {adding && (
+        <Modal title="Nouveau profil WireGuard" wide onClose={() => setAdding(false)}>
+          <form className="flex flex-col gap-4" onSubmit={submit}>
+            <Field label="Nom du profil" value={name} onChange={setName} autoFocus />
+            <textarea
+              rows={11}
+              value={conf}
+              onChange={(e) => setConf(e.target.value)}
+              spellCheck={false}
+              placeholder={'[Interface]\nPrivateKey = …\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = …\nAllowedIPs = 10.0.0.0/8\nEndpoint = vpn.example.com:51820'}
+              className="w-full resize-y rounded-[var(--radius-md3-m)] border border-outline bg-surface-low p-3 font-mono text-xs leading-relaxed text-on-surface outline-none focus:border-2 focus:border-primary"
+            />
+            <p className="text-xs text-on-surface-variant">
+              Collez la configuration fournie par votre routeur. Seuls les réseaux listés dans{' '}
+              <code>AllowedIPs</code> passeront par le tunnel ; la clé privée n’est jamais réaffichée.
+            </p>
+            {formError && <Banner tone="error">{formError}</Banner>}
+            <div className="flex justify-end gap-2">
+              <TextButton onClick={() => setAdding(false)}>Annuler</TextButton>
+              <FilledButton disabled={!name.trim() || !conf.trim()}>Ajouter</FilledButton>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {pending && (
+        <ConfirmModal
+          title="Supprimer ce profil ?"
+          busy={busy}
+          body={
+            <>
+              Le profil <strong className="text-on-surface">{pending.name}</strong> et sa clé privée seront
+              retirés de la configuration.
+              {wg?.active === pending.tag && (
+                <span className="mt-2 block">
+                  C’est le profil actif : le trafic basculera sur un autre profil s’il en reste, sinon il
+                  ressortira directement par cette machine.
+                </span>
+              )}
+            </>
+          }
+          onClose={() => setPending(null)}
+          onConfirm={() => {
+            const tag = pending.tag
+            setPending(null)
+            void act(() => api(`/api/wireguard/${tag}`, { method: 'DELETE' }))
+          }}
+        />
+      )}
+    </>
   )
 }
 
-/* ── Client apps ─────────────────────────────────────────────────────────── */
+/* ── Applications ────────────────────────────────────────────────────────── */
 
 type Platform = 'android' | 'ios' | 'windows' | 'macos' | 'linux'
 
@@ -539,14 +594,13 @@ function detectPlatform(): Platform {
   return 'linux'
 }
 
-function Clients() {
+function AppsTab() {
   const [platform, setPlatform] = useState<Platform>(detectPlatform)
-
   return (
-    <Card className="mt-8">
-      <h2 className="mb-1 text-xl leading-7 font-normal text-on-surface">Applications clientes</h2>
+    <Card>
+      <h2 className="mb-1 text-xl leading-7 font-normal">Applications clientes</h2>
       <p className="mb-5 text-sm text-on-surface-variant">
-        Scanne le QR code ou colle le lien dans l’une de ces applications.
+        Scannez le QR code ou collez le lien dans l’une de ces applications.
       </p>
 
       <div className="mb-5 -mx-1 flex overflow-x-auto px-1 pb-1">
@@ -558,17 +612,13 @@ function Clients() {
                 key={p.id}
                 type="button"
                 onClick={() => setPlatform(p.id)}
-                className={`state-layer h-10 shrink-0 px-4 text-sm font-medium whitespace-nowrap transition-colors ${
+                className={`state-layer h-10 shrink-0 px-4 text-sm font-medium whitespace-nowrap ${
                   on ? 'bg-secondary-container text-on-secondary-container' : 'text-on-surface-variant'
                 } ${i === 0 ? 'rounded-l-[var(--radius-md3-full)]' : 'border-l border-outline'} ${
                   i === PLATFORMS.length - 1 ? 'rounded-r-[var(--radius-md3-full)]' : ''
                 }`}
               >
-                {on && (
-                  <svg viewBox="0 0 24 24" className="mr-1.5 inline size-[18px] fill-current" aria-hidden>
-                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
-                  </svg>
-                )}
+                {on && <Check className="mr-1.5 inline" />}
                 {p.label}
               </button>
             )
@@ -603,192 +653,106 @@ function Clients() {
   )
 }
 
-/* ── MD3 building blocks ─────────────────────────────────────────────────── */
+/* ── Paramètres ──────────────────────────────────────────────────────────── */
 
-function Shell({ children, trailing }: { children: React.ReactNode; trailing?: React.ReactNode }) {
-  return (
-    <div className="min-h-screen bg-surface text-on-surface">
-      <header className="sticky top-0 z-10 bg-surface/85 backdrop-blur-md">
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <span className="grid size-10 place-items-center rounded-[var(--radius-md3-m)] bg-primary-container text-on-primary-container">
-              <svg viewBox="0 0 24 24" className="size-5 fill-current" aria-hidden>
-                <path d="M12 2L4 6v6c0 5 3.4 9.4 8 10 4.6-.6 8-5 8-10V6l-8-4zm0 5a2.5 2.5 0 110 5 2.5 2.5 0 010-5zm0 11c-1.7 0-3.2-.9-4-2.2.1-1.3 2.7-2 4-2s3.9.7 4 2A4.7 4.7 0 0112 18z" />
-              </svg>
-            </span>
-            <div>
-              <h1 className="text-xl leading-6 font-normal">sing-box</h1>
-              <p className="text-xs text-on-surface-variant">administration du tunnel</p>
-            </div>
-          </div>
-          {trailing}
-        </div>
-      </header>
-      <main className="mx-auto max-w-3xl px-4 pb-16 sm:px-6">{children}</main>
-    </div>
-  )
-}
+function SettingsTab({ state }: { state: State }) {
+  const [open, setOpen] = useState(false)
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [done, setDone] = useState(false)
 
-function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return (
-    <section className={`rounded-[var(--radius-md3-xl)] bg-surface-container p-6 ${className}`}>
-      {children}
-    </section>
-  )
-}
-
-function Field({
-  label,
-  value,
-  onChange,
-  type = 'text',
-  autoFocus,
-  className = '',
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  type?: string
-  autoFocus?: boolean
-  className?: string
-}) {
-  return (
-    <label className={`group relative block ${className}`}>
-      <input
-        type={type}
-        value={value}
-        autoFocus={autoFocus}
-        placeholder=" "
-        onChange={(e) => onChange(e.target.value)}
-        className="peer h-14 w-full rounded-[var(--radius-md3-xs)] border border-outline bg-transparent px-4 pt-4 text-base text-on-surface outline-none transition-colors focus:border-2 focus:border-primary focus:px-[15px]"
-      />
-      <span className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-base text-on-surface-variant transition-all peer-focus:top-2.5 peer-focus:text-xs peer-focus:text-primary peer-[:not(:placeholder-shown)]:top-2.5 peer-[:not(:placeholder-shown)]:text-xs">
-        {label}
-      </span>
-    </label>
-  )
-}
-
-function FilledButton({
-  children,
-  disabled,
-  className = '',
-}: {
-  children: React.ReactNode
-  disabled?: boolean
-  className?: string
-}) {
-  return (
-    <button
-      disabled={disabled}
-      className={`state-layer inline-flex h-10 items-center gap-2 rounded-[var(--radius-md3-full)] bg-primary px-6 text-sm font-medium text-on-primary transition-opacity disabled:pointer-events-none disabled:opacity-38 ${className}`}
-    >
-      {children}
-    </button>
-  )
-}
-
-function TonalButton({
-  children,
-  onClick,
-  className = '',
-}: {
-  children: React.ReactNode
-  onClick?: () => void
-  className?: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`state-layer inline-flex h-10 items-center gap-2 rounded-[var(--radius-md3-full)] bg-secondary-container px-5 text-sm font-medium text-on-secondary-container ${className}`}
-    >
-      {children}
-    </button>
-  )
-}
-
-function TextButton({
-  children,
-  onClick,
-  disabled,
-  tone,
-}: {
-  children: React.ReactNode
-  onClick?: () => void
-  disabled?: boolean
-  tone?: 'error'
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`state-layer inline-flex h-10 items-center rounded-[var(--radius-md3-full)] px-3 text-sm font-medium disabled:pointer-events-none disabled:opacity-38 ${
-        tone === 'error' ? 'text-error' : 'text-primary'
-      }`}
-    >
-      {children}
-    </button>
-  )
-}
-
-function IconButton({
-  children,
-  label,
-  onClick,
-}: {
-  children: React.ReactNode
-  label: string
-  onClick?: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      className="state-layer grid size-10 shrink-0 place-items-center rounded-[var(--radius-md3-full)] text-on-surface-variant"
-    >
-      <svg viewBox="0 0 24 24" className="size-6 fill-current" aria-hidden>
-        {children}
-      </svg>
-    </button>
-  )
-}
-
-function Chip({ children, tone }: { children: React.ReactNode; tone?: 'ok' | 'error' }) {
-  const tones = {
-    ok: 'bg-secondary-container text-on-secondary-container',
-    error: 'bg-error-container text-on-error-container',
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    if (next !== confirm) return setError('les deux saisies diffèrent')
+    setBusy(true)
+    try {
+      await api('/api/password', { method: 'POST', body: JSON.stringify({ current, next }) })
+      setCurrent(''); setNext(''); setConfirm('')
+      setOpen(false)
+      setDone(true)
+      setTimeout(() => setDone(false), 4000)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
   }
+
   return (
-    <span
-      className={`inline-flex h-8 items-center gap-2 rounded-[var(--radius-md3-s)] px-3 text-xs font-medium ${
-        tone ? tones[tone] : 'border border-outline-variant text-on-surface-variant'
-      }`}
-    >
-      {children}
-    </span>
+    <>
+      <Card className="mb-6">
+        <h2 className="mb-4 text-xl leading-7 font-normal">Service</h2>
+        <table className="w-full text-sm">
+          <tbody>
+            <Row label="État">{state.service?.running ? 'actif' : 'arrêté'}</Row>
+            <Row label="Version">{state.service?.version}</Row>
+            <Row label="Nom public">
+              {state.tunnel?.host}:{state.tunnel?.port}
+            </Row>
+            <Row label="Chemin WebSocket">{state.tunnel?.path}</Row>
+          </tbody>
+        </table>
+      </Card>
+
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl leading-7 font-normal">Mot de passe</h2>
+            <p className="mt-1 text-sm text-on-surface-variant">
+              {done ? 'Modifié — les autres sessions ont été fermées.' : 'Accès à cette interface.'}
+            </p>
+          </div>
+          <TonalButton onClick={() => { setError(''); setOpen(true) }}>Changer</TonalButton>
+        </div>
+      </Card>
+
+      {open && (
+        <Modal title="Changer le mot de passe" onClose={() => setOpen(false)}>
+          <form className="flex flex-col gap-4" onSubmit={submit}>
+            <Field label="Mot de passe actuel" type="password" value={current} onChange={setCurrent} autoFocus />
+            <Field label="Nouveau mot de passe" type="password" value={next} onChange={setNext} />
+            <Field label="Confirmer" type="password" value={confirm} onChange={setConfirm} />
+            <p className="text-xs text-on-surface-variant">
+              10 caractères minimum. Les autres sessions seront fermées.
+            </p>
+            {error && <Banner tone="error">{error}</Banner>}
+            <div className="flex justify-end gap-2">
+              <TextButton onClick={() => setOpen(false)}>Annuler</TextButton>
+              <FilledButton disabled={busy || !current || !next || !confirm}>Enregistrer</FilledButton>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </>
   )
 }
 
-function Banner({
-  children,
-  tone,
-  className = '',
-}: {
-  children: React.ReactNode
-  tone?: 'error'
-  className?: string
-}) {
+/* ── Icônes ──────────────────────────────────────────────────────────────── */
+
+function Shield({ className = '' }: { className?: string }) {
   return (
-    <div
-      className={`rounded-[var(--radius-md3-m)] px-4 py-3 text-sm ${
-        tone === 'error' ? 'bg-error-container text-on-error-container' : 'bg-surface-high'
-      } ${className}`}
-    >
-      {children}
-    </div>
+    <svg viewBox="0 0 24 24" className={`fill-current ${className}`} aria-hidden>
+      <path d="M12 2L4 6v6c0 5 3.4 9.4 8 10 4.6-.6 8-5 8-10V6l-8-4zm0 5a2.5 2.5 0 110 5 2.5 2.5 0 010-5zm0 11c-1.7 0-3.2-.9-4-2.2.1-1.3 2.7-2 4-2s3.9.7 4 2A4.7 4.7 0 0112 18z" />
+    </svg>
+  )
+}
+
+function Plus() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-[18px] fill-current" aria-hidden>
+      <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+    </svg>
+  )
+}
+
+function Check({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={`size-[18px] fill-current ${className}`} aria-hidden>
+      <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+    </svg>
   )
 }

@@ -60,7 +60,8 @@ type Config = {
   route?: { rules?: Rule[]; final?: string; [k: string]: unknown }
 }
 
-const WG_TAG = 'wg-out'
+const WG_PREFIX = 'wg'
+const WG_AUTO = 'wg-auto'
 
 const run = (cmd: string, args: string[]) =>
   new Promise<{ ok: boolean; out: string }>((resolve) => {
@@ -166,7 +167,7 @@ function parseWireguard(text: string): { endpoint: Endpoint; allowedIps: string[
   return {
     endpoint: {
       type: 'wireguard',
-      tag: WG_TAG,
+      tag: '',
       address: address.split(',').map((s) => s.trim()).filter(Boolean),
       private_key: privateKey,
       peers: [peer],
@@ -175,19 +176,84 @@ function parseWireguard(text: string): { endpoint: Endpoint; allowedIps: string[
   }
 }
 
+const slug = (name: string) =>
+  name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'wg'
+
+const isWgTag = (tag: string) => tag.startsWith(`${WG_PREFIX}-`)
+const wgName = (tag: string) => tag.slice(WG_PREFIX.length + 1)
+
+/**
+ * Which outbound the tunnelled traffic currently leaves by. Either a single
+ * endpoint, or the urltest group when automatic failover is on.
+ */
+function activeTarget(cfg: Config): string | null {
+  const rule = cfg.route?.rules?.find((r) => r.outbound && (isWgTag(r.outbound) || r.outbound === WG_AUTO))
+  return rule?.outbound ?? null
+}
+
 function wireguardSummary(cfg: Config) {
-  const ep = cfg.endpoints?.find((e) => e.tag === WG_TAG)
-  if (!ep) return null
-  const peer = ep.peers?.[0]
-  // The private key is never returned.
+  const profiles = (cfg.endpoints ?? [])
+    .filter((e) => isWgTag(e.tag))
+    .map((e) => {
+      const peer = e.peers?.[0]
+      // The private key is never returned.
+      return {
+        tag: e.tag,
+        name: wgName(e.tag),
+        address: e.address,
+        peer: peer ? `${peer.address}:${peer.port}` : null,
+        publicKey: peer?.public_key ?? null,
+        allowedIps: peer?.allowed_ips ?? [],
+        keepalive: peer?.persistent_keepalive_interval ?? null,
+        presharedKey: Boolean(peer?.pre_shared_key),
+      }
+    })
+
+  const target = activeTarget(cfg)
+  const auto = (cfg.outbounds ?? []).find(
+    (o) => (o as { tag?: string })?.tag === WG_AUTO,
+  ) as { outbounds?: string[] } | undefined
+
   return {
-    address: ep.address,
-    peer: peer ? `${peer.address}:${peer.port}` : null,
-    publicKey: peer?.public_key ?? null,
-    allowedIps: peer?.allowed_ips ?? [],
-    keepalive: peer?.persistent_keepalive_interval ?? null,
-    presharedKey: Boolean(peer?.pre_shared_key),
+    profiles,
+    active: target,
+    failover: target === WG_AUTO,
+    failoverMembers: auto?.outbounds ?? [],
   }
+}
+
+/** Point routing at one endpoint, or at the failover group. */
+function setActive(cfg: Config, target: string | null, members: string[]) {
+  cfg.route = cfg.route ?? {}
+  cfg.outbounds = (cfg.outbounds ?? []).filter((o) => (o as { tag?: string })?.tag !== WG_AUTO)
+  cfg.route.rules = (cfg.route.rules ?? []).filter(
+    (r) => !(r.outbound && (isWgTag(r.outbound) || r.outbound === WG_AUTO)),
+  )
+  if (!target) return
+
+  const chosen =
+    target === WG_AUTO
+      ? (cfg.endpoints ?? []).filter((e) => members.includes(e.tag))
+      : (cfg.endpoints ?? []).filter((e) => e.tag === target)
+  if (chosen.length === 0) throw new Error('profil introuvable')
+
+  if (target === WG_AUTO) {
+    // urltest probes each member and picks whichever answers, which is what
+    // gives automatic recovery when one tunnel stops passing traffic.
+    cfg.outbounds.push({
+      type: 'urltest',
+      tag: WG_AUTO,
+      outbounds: chosen.map((e) => e.tag),
+      url: 'https://www.gstatic.com/generate_204',
+      interval: '3m',
+      tolerance: 50,
+    })
+  }
+
+  // Route the union of what the selected peers accept, so a split tunnel stays
+  // split whichever profile is serving.
+  const cidrs = [...new Set(chosen.flatMap((e) => e.peers?.[0]?.allowed_ips ?? []))]
+  cfg.route.rules.push({ ip_cidr: cidrs, outbound: target })
 }
 
 // ── Auth: one shared password, sessions held in memory. Restarting the service
@@ -328,16 +394,38 @@ app.delete('/api/users/:uuid', requireAuth, async (req, res) => {
 
 app.post('/api/wireguard', requireAuth, async (req, res) => {
   try {
-    const { endpoint, allowedIps } = parseWireguard(String(req.body?.config ?? ''))
+    const name = String(req.body?.name ?? '').trim()
+    if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
+
+    const { endpoint } = parseWireguard(String(req.body?.config ?? ''))
+    endpoint.tag = `${WG_PREFIX}-${slug(name)}`
+
     const cfg = readConfig()
+    const existed = (cfg.endpoints ?? []).some((e) => e.tag === endpoint.tag)
+    cfg.endpoints = [...(cfg.endpoints ?? []).filter((e) => e.tag !== endpoint.tag), endpoint]
 
-    cfg.endpoints = [...(cfg.endpoints ?? []).filter((e) => e.tag !== WG_TAG), endpoint]
-    cfg.route = cfg.route ?? {}
-    // Route exactly what the peer accepts through the tunnel, and nothing else,
-    // so a split-tunnel AllowedIPs stays a split tunnel.
-    const rules = (cfg.route.rules ?? []).filter((r) => r.outbound !== WG_TAG)
-    cfg.route.rules = [...rules, { ip_cidr: allowedIps, outbound: WG_TAG }]
+    // First profile added becomes the active one; otherwise leave the choice
+    // where the operator put it.
+    if (!activeTarget(cfg) && !existed) setActive(cfg, endpoint.tag, [])
 
+    await commit(cfg)
+    res.json({ ok: true, tag: endpoint.tag })
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+
+app.post('/api/wireguard/active', requireAuth, async (req, res) => {
+  try {
+    const cfg = readConfig()
+    const failover = Boolean(req.body?.failover)
+    const tag = req.body?.tag ? String(req.body.tag) : null
+    const members = Array.isArray(req.body?.members) ? req.body.members.map(String) : []
+
+    if (failover && members.length < 2)
+      return res.status(400).json({ error: 'la bascule automatique demande au moins deux profils' })
+
+    setActive(cfg, failover ? WG_AUTO : tag, members)
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
@@ -345,13 +433,31 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
   }
 })
 
-app.delete('/api/wireguard', requireAuth, async (req, res) => {
+app.delete('/api/wireguard/:tag', requireAuth, async (req, res) => {
   try {
+    const tag = req.params.tag
     const cfg = readConfig()
-    if (!cfg.endpoints?.some((e) => e.tag === WG_TAG))
-      return res.status(404).json({ error: 'aucun tunnel configure' })
-    cfg.endpoints = cfg.endpoints.filter((e) => e.tag !== WG_TAG)
-    if (cfg.route?.rules) cfg.route.rules = cfg.route.rules.filter((r) => r.outbound !== WG_TAG)
+    if (!cfg.endpoints?.some((e) => e.tag === tag))
+      return res.status(404).json({ error: 'profil introuvable' })
+
+    cfg.endpoints = cfg.endpoints.filter((e) => e.tag !== tag)
+
+    // Deleting the profile in use would leave a rule pointing nowhere, which
+    // sing-box rejects outright: fall back to whatever remains, or to nothing.
+    const target = activeTarget(cfg)
+    const remaining = cfg.endpoints.filter((e) => isWgTag(e.tag)).map((e) => e.tag)
+    if (target === tag) {
+      setActive(cfg, remaining[0] ?? null, [])
+    } else if (target === WG_AUTO) {
+      const members = (
+        (cfg.outbounds ?? []).find((o) => (o as { tag?: string })?.tag === WG_AUTO) as
+          | { outbounds?: string[] }
+          | undefined
+      )?.outbounds?.filter((t) => t !== tag) ?? []
+      if (members.length >= 2) setActive(cfg, WG_AUTO, members)
+      else setActive(cfg, members[0] ?? remaining[0] ?? null, [])
+    }
+
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
