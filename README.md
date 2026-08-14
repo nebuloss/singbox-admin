@@ -16,7 +16,7 @@ QR code. There are two different ways to take access away:
 
 | | effect | reversible |
 |---|---|---|
-| switch off | the device still connects, but no traffic passes | yes, instantly |
+| switch off | the device can no longer connect; its link and QR stay valid | yes, instantly |
 | revoke | the UUID is removed; link and QR stop working | no — coming back means a new identity |
 
 **Tunnels.** WireGuard endpoints, pasted in as the `.conf` file a router or
@@ -57,24 +57,29 @@ library.
 
 ### Where the state lives
 
-sing-box rejects unknown keys, so neither a suspended device nor a disabled
-tunnel can carry an `"enabled": false` field of our own. Both states are
-expressed with what the configuration format already offers:
+sing-box rejects unknown keys, so nothing here can carry an `"enabled": false`
+field of our own. Every state is expressed with what the format already offers:
 
-- a suspended device is named in a single routing rule,
-  `{"auth_user": ["…"], "action": "reject"}`, kept first so it wins over the
-  tunnel rule below it
+- **a suspended device is moved, not flagged.** It goes to a second VLESS
+  inbound, tagged `vless-suspended` and bound to `127.0.0.1`, which no reverse
+  proxy forwards and nothing off the host can reach. The shelf is created when
+  the first device lands on it and removed when the last one leaves.
 - a disabled tunnel carries a `wgx-` tag instead of `wg-`
 - the tunnel in use is whichever one a routing rule points at; no such rule
   means traffic leaves directly
 
+Moving rather than flagging is what keeps the **UUID the identity**. The
+alternative is a routing rule matching the device by name — which works, but
+makes the name load-bearing: every rename then has to drag the rule along, and
+a config edited by hand desynchronises silently. Here a name is only ever a
+label, and renaming touches nothing else.
+
+(If you do write such a rule yourself, the matcher is `auth_user`. There is
+also a `user` field — it passes `sing-box check`, but matches the OS process
+owner, so the rule quietly matches nothing.)
+
 Nothing is stored anywhere else. Edit the file by hand, reload the page, and it
 shows what you wrote.
-
-One trap if you write such a rule yourself: the matcher is `auth_user`. There
-is also a `user` field — it passes `sing-box check`, but it matches the OS
-process owner, so the rule silently matches nothing and the device stays
-online.
 
 ## Requirements
 
@@ -252,9 +257,9 @@ proxy that terminates TLS — not to face the internet.
   variable where `systemctl show` or `/proc/<pid>/environ` would expose it
 - The process runs as root because it writes the sing-box configuration and
   drives the service manager
-- Switching a device off blocks its traffic but keeps its identity: it still
-  authenticates, and its link stays valid. Revoking is the hard cut — use that
-  one when a device is lost or out of your hands
+- Switching a device off moves it off the public inbound, so it can no longer
+  authenticate at all — but it keeps its identity and its link, ready to work
+  again the moment you switch it back. Revoking is the permanent cut
 
 ## Licence
 

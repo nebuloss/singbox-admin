@@ -364,9 +364,8 @@ function UserCard({
               </IconButton>
               <Switch
                 label={`${t('Activer')} ${user.name ?? user.uuid.slice(0, 8)}`}
-                title={user.name ? undefined : t('Un appareil sans nom ne peut pas être désactivé.')}
                 checked={user.enabled}
-                disabled={busy || !user.name}
+                disabled={busy}
                 onChange={onToggle}
               />
             </div>
@@ -374,7 +373,7 @@ function UserCard({
 
           {!user.enabled && (
             <p className="text-xs text-on-surface-variant">
-              {t('Le lien reste valide, mais aucun trafic ne passe tant qu’il est désactivé.')}
+              {t('Le lien reste valide : réactiver l’appareil suffit à le remettre en service.')}
             </p>
           )}
           <textarea

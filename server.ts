@@ -42,7 +42,13 @@ const readOnly = () => auth === null
 // ── Types kept deliberately loose: we only touch the users array and leave the
 //    rest of the sing-box config untouched, whatever it contains.
 type User = { uuid: string; name?: string }
-type Inbound = { type?: string; users?: User[]; transport?: { path?: string } }
+type Inbound = {
+  type?: string
+  tag?: string
+  listen?: string
+  users?: User[]
+  transport?: { path?: string }
+}
 type Peer = {
   address: string
   port: number
@@ -52,7 +58,7 @@ type Peer = {
   persistent_keepalive_interval?: number
 }
 type Endpoint = { type: string; tag: string; address: string[]; private_key: string; peers: Peer[] }
-type Rule = { ip_cidr?: string[]; outbound?: string; auth_user?: string[]; action?: string }
+type Rule = { ip_cidr?: string[]; outbound?: string }
 type Config = {
   inbounds?: Inbound[]
   endpoints?: Endpoint[]
@@ -77,13 +83,53 @@ function readConfig(): Config {
   return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config
 }
 
-/** The VLESS inbound is the one we manage; there is exactly one in practice. */
-function vlessInbound(cfg: Config): Inbound {
-  const inbound = cfg.inbounds?.find((i) => i.type === 'vless')
+/**
+ * Suspension is a place, not a flag.
+ *
+ * sing-box offers no field for "this device is off", and a routing rule can
+ * only match a user by name — which would make the name the identity and turn
+ * every rename into a delicate operation. So a suspended device is moved to a
+ * second VLESS inbound bound to localhost: nothing proxies it, nothing outside
+ * the host can reach it. The UUID stays the identity and the name goes back to
+ * being nothing but a label.
+ */
+const PARKED = 'vless-suspended'
+
+const vlessInbounds = (cfg: Config) => (cfg.inbounds ?? []).filter((i) => i.type === 'vless')
+
+/** The inbound clients actually reach. */
+function liveInbound(cfg: Config): Inbound {
+  const inbound = vlessInbounds(cfg).find((i) => i.tag !== PARKED)
   if (!inbound) throw new Error('aucun inbound VLESS dans la configuration')
   if (!Array.isArray(inbound.users)) inbound.users = []
   return inbound
 }
+
+const parkedInbound = (cfg: Config) => vlessInbounds(cfg).find((i) => i.tag === PARKED)
+
+/** The shelf, created on demand. `listen` is explicit rather than relying on
+ *  sing-box defaulting to localhost — that default is what makes it safe. */
+function shelf(cfg: Config): Inbound {
+  let parked = parkedInbound(cfg)
+  if (!parked) {
+    parked = { type: 'vless', tag: PARKED, listen: '127.0.0.1', users: [] }
+    cfg.inbounds = [...(cfg.inbounds ?? []), parked]
+  }
+  if (!Array.isArray(parked.users)) parked.users = []
+  return parked
+}
+
+/** An empty shelf is noise in the config, so it does not outlive its contents. */
+function tidyShelf(cfg: Config) {
+  const parked = parkedInbound(cfg)
+  if (parked && !parked.users?.length)
+    cfg.inbounds = (cfg.inbounds ?? []).filter((i) => i !== parked)
+}
+
+const allUsers = (cfg: Config) => [
+  ...(liveInbound(cfg).users ?? []),
+  ...(parkedInbound(cfg)?.users ?? []),
+]
 
 /**
  * Write the config, verify it with `sing-box check`, restart the service.
@@ -91,10 +137,8 @@ function vlessInbound(cfg: Config): Inbound {
  * the tunnel down.
  */
 async function commit(cfg: Config): Promise<void> {
-  // Every write leaves the file self-consistent, whatever the caller did:
-  // rejections naming a device that is gone are dropped rather than carried
-  // forward. Reads already ignore them, so this only keeps the file honest.
-  applyUserRules(cfg, disabledUsers(cfg))
+  // Whatever the caller was changing, the file comes out tidy.
+  tidyShelf(cfg)
 
   const backup = fs.readFileSync(CONFIG_PATH, 'utf8')
   const tmp = path.join(os.tmpdir(), `singbox-admin-${process.pid}.json`)
@@ -204,7 +248,7 @@ const wgEndpoints = (cfg: Config) => (cfg.endpoints ?? []).filter((e) => isWgTag
  * The tunnel currently carrying traffic, if any — counting only a rule that
  * points at a tunnel still present.
  *
- * Same reasoning as disabledUsers: a rule naming a tag nobody defines is stale,
+ * A rule naming a tag nobody defines is stale — from a hand-edited config —
  * and taking it at face value would report the outbound as on while sing-box
  * refuses to start on exactly that dangling reference.
  */
@@ -232,46 +276,6 @@ function applyRouting(cfg: Config, on: boolean) {
 
   // Route exactly what the peer accepts, so a split tunnel stays split.
   cfg.route.rules.push({ ip_cidr: first.peers?.[0]?.allowed_ips ?? [], outbound: first.tag })
-}
-
-/**
- * Disabling a device cannot be written on the user object — sing-box rejects
- * unknown keys there, exactly as it does on endpoints. It lives in routing
- * instead: a single rule rejecting every disabled name, kept first so it wins
- * over the tunnel rule below it.
- *
- * The matcher is `auth_user`, the authenticated inbound user. Do not reach for
- * `user`: it passes `sing-box check` but means the OS process owner, so the
- * rule silently matches nothing and the device stays online.
- *
- * A disabled device still authenticates and its link stays valid — nothing
- * leaves, that is all. Revoking, which drops the UUID, is the hard cut.
- */
-const isRejectRule = (r: Rule) => r.action === 'reject' && Array.isArray(r.auth_user)
-
-/**
- * The suspended devices — intersected with the devices that actually exist.
- *
- * The UUID is the identity and never changes, but the rule can only match on
- * the name, so the two are kept in step on every rename. Filtering here closes
- * the one case the code does not control: a config edited by hand, where a
- * device was renamed or removed without its rule following. A leftover name
- * would otherwise lie in wait and suspend the next device to be given it.
- */
-function disabledUsers(cfg: Config): Set<string> {
-  const live = new Set(
-    (cfg.inbounds?.find((i) => i.type === 'vless')?.users ?? [])
-      .map((u) => u.name)
-      .filter((n): n is string => Boolean(n)),
-  )
-  const listed = cfg.route?.rules?.find(isRejectRule)?.auth_user ?? []
-  return new Set(listed.filter((n) => live.has(n)))
-}
-
-function applyUserRules(cfg: Config, disabled: Set<string>) {
-  cfg.route = cfg.route ?? {}
-  cfg.route.rules = (cfg.route.rules ?? []).filter((r) => !isRejectRule(r))
-  if (disabled.size) cfg.route.rules.unshift({ auth_user: [...disabled], action: 'reject' })
 }
 
 function wireguardSummary(cfg: Config) {
@@ -375,23 +379,21 @@ app.get('/api/state', async (req, res) => {
   if (!authed(req)) return res.json({ authed: false, setup: auth === null })
   try {
     const cfg = readConfig()
-    const inbound = vlessInbound(cfg)
+    const inbound = liveInbound(cfg)
     const wsPath = inbound.transport?.path ?? '/'
     const version = (await run('sing-box', ['version'])).out.split('\n')[0] ?? ''
     const status = await run('rc-service', [SERVICE, 'status'])
 
-    const disabled = disabledUsers(cfg)
-    const users = await Promise.all(
-      (inbound.users ?? []).map(async (u) => {
-        const link = linkFor(u, wsPath)
-        return {
-          ...u,
-          link,
-          enabled: !(u.name && disabled.has(u.name)),
-          qr: await QRCode.toString(link, { type: 'svg', margin: 1 }),
-        }
-      }),
-    )
+    // Suspended devices keep the public link — it is what makes them work
+    // again the moment they are put back.
+    const describe = async (u: User, enabled: boolean) => {
+      const link = linkFor(u, wsPath)
+      return { ...u, link, enabled, qr: await QRCode.toString(link, { type: 'svg', margin: 1 }) }
+    }
+    const users = await Promise.all([
+      ...(inbound.users ?? []).map((u) => describe(u, true)),
+      ...(parkedInbound(cfg)?.users ?? []).map((u) => describe(u, false)),
+    ])
     res.json({
       authed: true,
       users,
@@ -409,14 +411,11 @@ app.post('/api/users', requireAuth, async (req, res) => {
   if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
   try {
     const cfg = readConfig()
-    const inbound = vlessInbound(cfg)
-    if (inbound.users!.some((u) => u.name === name))
+    // Names are checked across both lists: a suspended device still holds its
+    // name, and two devices sharing one would be unreadable in the interface.
+    if (allUsers(cfg).some((u) => u.name === name))
       return res.status(409).json({ error: 'ce nom existe deja' })
-    inbound.users!.push({ uuid: crypto.randomUUID(), name })
-    // A leftover rejection under the same name would make the new device dead
-    // on arrival, with nothing in the interface explaining why.
-    const disabled = disabledUsers(cfg)
-    if (disabled.delete(name)) applyUserRules(cfg, disabled)
+    liveInbound(cfg).users!.push({ uuid: crypto.randomUUID(), name })
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
@@ -427,16 +426,17 @@ app.post('/api/users', requireAuth, async (req, res) => {
 app.delete('/api/users/:uuid', requireAuth, async (req, res) => {
   try {
     const cfg = readConfig()
-    const inbound = vlessInbound(cfg)
-    const gone = inbound.users!.find((u) => u.uuid === req.params.uuid)
-    if (!gone) return res.status(404).json({ error: 'inconnu' })
-    inbound.users = inbound.users!.filter((u) => u.uuid !== req.params.uuid)
-    if (inbound.users.length === 0)
+    if (!allUsers(cfg).some((u) => u.uuid === req.params.uuid))
+      return res.status(404).json({ error: 'inconnu' })
+    if (allUsers(cfg).length === 1)
       return res.status(400).json({ error: 'refus : cela supprimerait le dernier acces' })
 
-    // Drop any rejection it left behind, so the name comes back clean.
-    const disabled = disabledUsers(cfg)
-    if (gone.name && disabled.delete(gone.name)) applyUserRules(cfg, disabled)
+    const drop = (i: Inbound | undefined) => {
+      if (i?.users) i.users = i.users.filter((u) => u.uuid !== req.params.uuid)
+    }
+    drop(liveInbound(cfg))
+    drop(parkedInbound(cfg))
+
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
@@ -449,23 +449,15 @@ app.patch('/api/users/:uuid', requireAuth, async (req, res) => {
   if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
   try {
     const cfg = readConfig()
-    const inbound = vlessInbound(cfg)
-    const user = inbound.users!.find((u) => u.uuid === req.params.uuid)
+    const user = allUsers(cfg).find((u) => u.uuid === req.params.uuid)
     if (!user) return res.status(404).json({ error: 'inconnu' })
-    if (inbound.users!.some((u) => u.uuid !== user.uuid && u.name === name))
+    if (allUsers(cfg).some((u) => u.uuid !== user.uuid && u.name === name))
       return res.status(409).json({ error: 'ce nom existe deja' })
 
-    // The suspension rule matches on the name, so it has to follow the rename —
-    // otherwise a suspended device quietly comes back online under its new one.
-    const disabled = disabledUsers(cfg)
-    if (user.name && disabled.delete(user.name)) {
-      disabled.add(name)
-      applyUserRules(cfg, disabled)
-    }
+    // The whole point of the shelf: renaming touches a label and nothing else.
+    // The UUID is untouched, so a connected device is not cut off and a
+    // suspended one stays suspended.
     user.name = name
-
-    // The UUID does not change, so the link stays valid and connected devices
-    // are not cut off; only the label carried in the link changes.
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
@@ -476,18 +468,22 @@ app.patch('/api/users/:uuid', requireAuth, async (req, res) => {
 app.post('/api/users/:uuid/enabled', requireAuth, async (req, res) => {
   try {
     const cfg = readConfig()
-    const user = vlessInbound(cfg).users!.find((u) => u.uuid === req.params.uuid)
-    if (!user) return res.status(404).json({ error: 'inconnu' })
-    // Rejection matches on the name, so there is nothing to match on without
-    // one. Every device the interface creates has a name; a nameless one can
-    // only come from a hand-edited config.
-    if (!user.name)
-      return res.status(400).json({ error: 'un appareil sans nom ne peut pas etre desactive' })
+    const live = liveInbound(cfg)
+    const parked = parkedInbound(cfg)
+    const wanted = Boolean(req.body?.enabled)
 
-    const disabled = disabledUsers(cfg)
-    if (req.body?.enabled) disabled.delete(user.name)
-    else disabled.add(user.name)
-    applyUserRules(cfg, disabled)
+    const from = wanted ? parked : live
+    const user = from?.users?.find((u) => u.uuid === req.params.uuid)
+    // Already on the right shelf, or unknown — tell the two apart.
+    if (!user) {
+      const exists = allUsers(cfg).some((u) => u.uuid === req.params.uuid)
+      if (!exists) return res.status(404).json({ error: 'inconnu' })
+      return res.json({ ok: true })
+    }
+
+    from!.users = from!.users!.filter((u) => u.uuid !== req.params.uuid)
+    ;(wanted ? live : shelf(cfg)).users!.push(user)
+
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {

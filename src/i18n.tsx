@@ -46,10 +46,8 @@ const EN: Record<string, string> = {
   'L’identifiant ne change pas : un appareil déjà connecté n’est pas coupé, seule l’étiquette portée par le lien change.':
     'The identifier does not change: a connected device is not cut off, only the label carried by the link.',
   'Révoquer cet appareil ?': 'Revoke this device?',
-  'Le lien reste valide, mais aucun trafic ne passe tant qu’il est désactivé.':
-    'The link stays valid, but no traffic passes while it is disabled.',
-  'Un appareil sans nom ne peut pas être désactivé.':
-    'A device without a name cannot be disabled.',
+  'Le lien reste valide : réactiver l’appareil suffit à le remettre en service.':
+    'The link stays valid: switching the device back on is all it takes.',
   'Copier le lien': 'Copy the link',
   Copié: 'Copied',
 
@@ -156,7 +154,6 @@ const EN: Record<string, string> = {
   'identique a l actuel': 'same as the current one',
   'nom invalide': 'invalid name',
   'ce nom existe deja': 'that name already exists',
-  'un appareil sans nom ne peut pas etre desactive': 'a device without a name cannot be disabled',
   inconnu: 'unknown',
   'refus : cela supprimerait le dernier acces': 'refused: that would remove the last way in',
   'un tunnel porte deja ce nom': 'a tunnel already has that name',
