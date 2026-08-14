@@ -29,11 +29,8 @@ error() { printf "${RED}[x]${NC} %s\n" "$*"; exit 1; }
 [ -f "$RESET_JS" ]   || error "installation introuvable : $RESET_JS"
 command -v node >/dev/null 2>&1 || error "node absent du PATH"
 
-if [ $# -ge 1 ]; then
-  node "$RESET_JS" "$1"
-else
-  node "$RESET_JS"
-fi
+# No argument clears the hash; one argument sets that password.
+node "$RESET_JS" "$@"
 
 # The hash is read at startup, so the service has to be restarted to see it.
 if command -v rc-service >/dev/null 2>&1; then

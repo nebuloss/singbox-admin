@@ -1,11 +1,29 @@
 # singbox-admin
 
-A small web interface to manage the clients of a [sing-box](https://github.com/SagerNet/sing-box)
-VLESS inbound: add a device, get its connection link and QR code, revoke it.
+A small web interface for a [sing-box](https://github.com/SagerNet/sing-box)
+VLESS tunnel: hand out connection links and QR codes, suspend or revoke a
+device, and pick which WireGuard tunnel the traffic leaves through.
 
 It is deliberately narrow. There is no database, no user model, no traffic
 accounting — sing-box's own configuration file is the single source of truth,
-and the app only ever edits the `users` array of one inbound.
+and the app only touches the parts it owns: the `users` array of one inbound,
+the WireGuard endpoints, and the routing rules that reference them.
+
+## What it manages
+
+**Devices.** Adding one generates a UUID and gives you a `vless://` link and a
+QR code. There are two different ways to take access away:
+
+| | effect | reversible |
+|---|---|---|
+| switch off | the device still connects, but no traffic passes | yes, instantly |
+| revoke | the UUID is removed; link and QR stop working | no — coming back means a new identity |
+
+**Tunnels.** WireGuard endpoints, pasted in as the `.conf` file a router or
+provider hands you. They form an ordered list: the first enabled one carries
+the traffic, and a global switch drops back to leaving directly from this host.
+Only the networks listed in `AllowedIPs` are routed, so a split tunnel stays
+split.
 
 ## Why not a full panel
 
@@ -16,8 +34,10 @@ many users with quotas and expiry dates. It is the wrong one when you have a
 hand-written configuration you want to keep — a WireGuard endpoint, custom
 routing rules, a specific DNS setup — and you only need to hand out a link.
 
-This app never rewrites your configuration. It reads it, changes one array,
-validates the result and puts it back.
+This app never rewrites your configuration. It reads it, edits the few keys it
+owns, validates the result and puts it back. Everything else in the file —
+your DNS setup, your custom rules, whatever else you put there — is returned
+untouched.
 
 ## How it works
 
@@ -29,11 +49,32 @@ browser ──► Express ──► /etc/sing-box/config.json
 
 Every write follows the same path: keep a copy of the current file, write the
 new one, run `sing-box check` on it, and restore the copy if the check fails.
-A bad edit cannot leave the tunnel down. Deleting the last remaining user is
+A bad edit cannot leave the tunnel down. Deleting the last remaining device is
 refused outright, since that would lock everyone out including you.
 
 QR codes are rendered server-side as SVG, so the client bundle carries no QR
 library.
+
+### Where the state lives
+
+sing-box rejects unknown keys, so neither a suspended device nor a disabled
+tunnel can carry an `"enabled": false` field of our own. Both states are
+expressed with what the configuration format already offers:
+
+- a suspended device is named in a single routing rule,
+  `{"auth_user": ["…"], "action": "reject"}`, kept first so it wins over the
+  tunnel rule below it
+- a disabled tunnel carries a `wgx-` tag instead of `wg-`
+- the tunnel in use is whichever one a routing rule points at; no such rule
+  means traffic leaves directly
+
+Nothing is stored anywhere else. Edit the file by hand, reload the page, and it
+shows what you wrote.
+
+One trap if you write such a rule yourself: the matcher is `auth_user`. There
+is also a `user` field — it passes `sing-box check`, but it matches the OS
+process owner, so the rule silently matches nothing and the device stays
+online.
 
 ## Requirements
 
@@ -142,6 +183,9 @@ proxy that terminates TLS — not to face the internet.
   variable where `systemctl show` or `/proc/<pid>/environ` would expose it
 - The process runs as root because it writes the sing-box configuration and
   drives the service manager
+- Switching a device off blocks its traffic but keeps its identity: it still
+  authenticates, and its link stays valid. Revoking is the hard cut — use that
+  one when a device is lost or out of your hands
 
 ## Licence
 

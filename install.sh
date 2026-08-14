@@ -1,32 +1,30 @@
 #!/bin/sh
-# singbox-admin — install / update script (idempotent: same command does both)
+# singbox-admin — install / update (the same command does both)
 #
-# Deploys the admin SPA + API next to a running sing-box instance. It must run
-# ON the sing-box host: the app edits that host's config file and restarts that
+# Deploys the admin interface next to a running sing-box. It must run ON the
+# sing-box host: the app edits that host's configuration and restarts that
 # host's service.
 #
-# Usage (as root on the appliance):
+# Usage, as root:
 #   curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/install.sh \
-#     | ADMIN_PASSWORD=... PUBLIC_HOST=tunnel.example.com sh
+#     | ADMIN_PASSWORD='...' PUBLIC_HOST=tunnel.example.com sh
 #
-# Override defaults via env: APP_DIR, APP_PORT, GH_REPO, TARBALL (to install a
-# locally built archive instead of the latest release).
-#
-# Supported systems: Alpine Linux (OpenRC), Debian/Ubuntu (systemd)
+# Systems: Alpine Linux (OpenRC), Debian/Ubuntu (systemd)
 
 set -eu
 
-# Debian's /bin/sh omits /usr/local/bin from PATH, where sing-box is installed
-# on that distribution — without this the check below reports it as missing.
+# Debian's /bin/sh omits /usr/local/bin, where sing-box lands on that
+# distribution — without this the check below reports it as missing.
 PATH="/usr/local/bin:$PATH"
 export PATH
 
+# ── Settings, all overridable from the environment ───────────────────────────
 APP_DIR="${APP_DIR:-/opt/singbox-admin}"
 APP_PORT="${APP_PORT:-3000}"
+SERVICE_NAME="${SERVICE_NAME:-singbox-admin}"
 NODE_VERSION="${NODE_VERSION:-22}"
-SERVICE_NAME="singbox-admin"
 GH_REPO="${GH_REPO:-nebuloss/singbox-admin}"
-TARBALL="${TARBALL:-}"
+TARBALL="${TARBALL:-}"            # install this archive instead of a release
 SINGBOX_CONFIG="${SINGBOX_CONFIG:-/etc/sing-box/config.json}"
 SINGBOX_SERVICE="${SINGBOX_SERVICE:-sing-box}"
 PUBLIC_HOST="${PUBLIC_HOST:-example.com}"
@@ -38,28 +36,35 @@ info()  { printf "${GREEN}[+]${NC} %s\n" "$*"; }
 warn()  { printf "${YELLOW}[!]${NC} %s\n" "$*"; }
 error() { printf "${RED}[x]${NC} %s\n" "$*"; exit 1; }
 
-[ "$(id -u)" -eq 0 ] || error "a lancer en root"
+# ── Steps ────────────────────────────────────────────────────────────────────
 
-if   [ -f /etc/alpine-release ]; then OS=alpine
-elif [ -f /etc/debian_version ]; then OS=debian
-else error "systeme non supporte"; fi
-info "Systeme detecte : $OS"
+check_host() {
+  [ "$(id -u)" -eq 0 ] || error "a lancer en root"
 
-# The app rewrites SINGBOX_CONFIG and restarts SINGBOX_SERVICE, so it runs as
-# root. It lives in a single-purpose container; granting narrower rights would
-# mean a doas/sudo rule plus file ACLs for very little gain here.
-[ -f "$SINGBOX_CONFIG" ] || warn "config sing-box introuvable : $SINGBOX_CONFIG"
-command -v sing-box >/dev/null 2>&1 || warn "binaire sing-box absent du PATH"
+  if   [ -f /etc/alpine-release ]; then OS=alpine
+  elif [ -f /etc/debian_version ]; then OS=debian
+  else error "systeme non supporte"; fi
+  info "Systeme detecte : $OS"
 
-# ── Base packages + Node ──────────────────────────────────────────────────────
-case "$OS" in
-  alpine) apk update -q; apk add --no-cache curl ca-certificates tar >/dev/null ;;
-  debian) export DEBIAN_FRONTEND=noninteractive; apt-get update -qq; apt-get install -y -qq curl ca-certificates tar >/dev/null ;;
-esac
+  # Warnings, not errors: sing-box may legitimately be installed after this.
+  [ -f "$SINGBOX_CONFIG" ] || warn "config sing-box introuvable : $SINGBOX_CONFIG"
+  command -v sing-box >/dev/null 2>&1 || warn "binaire sing-box absent du PATH"
+}
 
-if command -v node >/dev/null 2>&1; then
-  info "Node deja present : $(node --version)"
-else
+install_node() {
+  case "$OS" in
+    alpine) apk update -q
+            apk add --no-cache curl ca-certificates tar >/dev/null ;;
+    debian) export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq curl ca-certificates tar >/dev/null ;;
+  esac
+
+  if command -v node >/dev/null 2>&1; then
+    info "Node deja present : $(node --version)"
+    return
+  fi
+
   info "Installation de Node ${NODE_VERSION}…"
   case "$OS" in
     alpine) apk add --no-cache nodejs npm >/dev/null ;;
@@ -67,68 +72,79 @@ else
             apt-get install -y -qq nodejs >/dev/null ;;
   esac
   info "Node installe : $(node --version)"
-fi
+}
 
-# ── Deploy the build ──────────────────────────────────────────────────────────
-if [ -d "$APP_DIR/dist-server" ]; then
-  info "Installation existante — mise a jour"
-  rc-service "$SERVICE_NAME" stop 2>/dev/null || systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-else
-  info "Installation initiale dans $APP_DIR"
-fi
+fetch_build() {
+  if [ -d "$APP_DIR/dist-server" ]; then
+    info "Installation existante — mise a jour"
+    rc-service "$SERVICE_NAME" stop 2>/dev/null \
+      || systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+  else
+    info "Installation initiale dans $APP_DIR"
+  fi
 
-rm -rf "$APP_DIR/dist" "$APP_DIR/dist-server"
-mkdir -p "$APP_DIR"
+  # Replace the build wholesale; anything left from an older layout would be
+  # dead weight at best.
+  rm -rf "$APP_DIR/dist" "$APP_DIR/dist-server"
+  mkdir -p "$APP_DIR"
 
-if [ -n "$TARBALL" ]; then
-  [ -f "$TARBALL" ] || error "archive introuvable : $TARBALL"
-  info "Installation depuis l'archive locale $TARBALL"
-  tar -xzf "$TARBALL" -C "$APP_DIR"
-else
-  APP_VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/releases/latest" \
+  if [ -n "$TARBALL" ]; then
+    [ -f "$TARBALL" ] || error "archive introuvable : $TARBALL"
+    info "Installation depuis l'archive locale $TARBALL"
+    tar -xzf "$TARBALL" -C "$APP_DIR"
+    return
+  fi
+
+  version=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/releases/latest" \
     | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-  [ -n "${APP_VERSION:-}" ] || error "aucune release publiee sur ${GH_REPO} — fournir TARBALL"
-  info "Telechargement de la version ${APP_VERSION}…"
+  [ -n "${version:-}" ] || error "aucune release publiee sur ${GH_REPO} — fournir TARBALL"
+  info "Telechargement de la version ${version}…"
   curl -fsSL "https://github.com/${GH_REPO}/releases/latest/download/singbox-admin.tar.gz" \
     | tar -xz -C "$APP_DIR"
-fi
+}
 
-info "Dependances de production…"
-cd "$APP_DIR"
-npm ci --omit=dev --prefer-offline --quiet 2>&1 | tail -3 || npm install --omit=dev --quiet 2>&1 | tail -3
+install_deps() {
+  info "Dependances de production…"
+  cd "$APP_DIR"
+  # Output goes to a file rather than through `| tail`: in a pipeline the exit
+  # status is tail's, so a failed install would look like a success and leave
+  # the app without its dependencies.
+  log=$(mktemp)
+  if ! npm ci --omit=dev --prefer-offline --no-audit --no-fund >"$log" 2>&1; then
+    warn "npm ci a echoue, bascule sur npm install"
+    if ! npm install --omit=dev --no-audit --no-fund >"$log" 2>&1; then
+      tail -20 "$log"; rm -f "$log"
+      error "installation des dependances impossible"
+    fi
+  fi
+  rm -f "$log"
+}
 
-# ── Credentials ───────────────────────────────────────────────────────────────
-# The password is hashed here and only the hash is stored. It is never written
-# to disk in clear text, and never handed to the service as an environment
-# variable — where it would show up in `systemctl show` or /proc/<pid>/environ.
-NODE_BIN=$(command -v node)
+set_password() {
+  # Hashed here, and only the hash is stored. The password is never written in
+  # clear text, and never handed to the service as an environment variable,
+  # where `systemctl show` or /proc/<pid>/environ would expose it.
+  if [ -n "$ADMIN_PASSWORD" ]; then
+    "$NODE_BIN" "$APP_DIR/dist-server/reset-password.js" "$ADMIN_PASSWORD" >/dev/null \
+      || error "ecriture du mot de passe impossible"
+    info "Mot de passe hache dans $APP_DIR/auth.json"
+  elif [ -f "$APP_DIR/auth.json" ]; then
+    info "Mot de passe existant conserve"
+  fi
 
-if [ -n "$ADMIN_PASSWORD" ]; then
-  "$NODE_BIN" "$APP_DIR/dist-server/reset-password.js" "$ADMIN_PASSWORD" >/dev/null \
-    && info "Mot de passe hache dans $APP_DIR/auth.json"
-elif [ -f "$APP_DIR/auth.json" ]; then
-  info "Mot de passe existant conserve"
-fi
+  # Judge the outcome, not the branch taken above: reaching this point without
+  # a hash file means the interface comes up unclaimed, and whoever loads it
+  # first gets to choose the password.
+  if [ ! -f "$APP_DIR/auth.json" ]; then
+    warn "AUCUN MOT DE PASSE DEFINI"
+    warn "L'interface demarre en mode premiere configuration : le premier"
+    warn "visiteur choisira le mot de passe. A faire tout de suite, ou definir"
+    warn "un mot de passe des maintenant :"
+    warn "  $NODE_BIN $APP_DIR/dist-server/reset-password.js 'votre mot de passe'"
+  fi
+}
 
-# Not a compatibility shim: this file never belongs on disk, so remove it
-# wherever it turns up rather than leaving a password in clear text behind.
-if [ -f "$APP_DIR/.env" ]; then
-  rm -f "$APP_DIR/.env"
-  warn "Fichier .env supprime (un mot de passe n'a rien a faire en clair)"
-fi
-
-# Check the outcome rather than which branch ran: an empty or password-less
-# .env satisfies [ -f ] but yields nothing to migrate, and the interface would
-# then come up unclaimed — anyone reaching it could set the password.
-if [ ! -f "$APP_DIR/auth.json" ]; then
-  warn "AUCUN MOT DE PASSE DEFINI"
-  warn "L'interface demarre en mode premiere configuration : le premier"
-  warn "visiteur choisira le mot de passe. A faire tout de suite, ou definir"
-  warn "un mot de passe des maintenant :"
-  warn "  $NODE_BIN $APP_DIR/dist-server/reset-password.js 'votre mot de passe'"
-fi
-
-if [ "$OS" = alpine ]; then
+install_service_openrc() {
   cat > "/etc/init.d/$SERVICE_NAME" <<EOF
 #!/sbin/openrc-run
 
@@ -153,7 +169,9 @@ EOF
   chmod +x "/etc/init.d/$SERVICE_NAME"
   rc-update add "$SERVICE_NAME" default >/dev/null 2>&1 || true
   rc-service "$SERVICE_NAME" restart >/dev/null 2>&1 || rc-service "$SERVICE_NAME" start
-else
+}
+
+install_service_systemd() {
   cat > "/etc/systemd/system/$SERVICE_NAME.service" <<EOF
 [Unit]
 Description=sing-box admin
@@ -175,7 +193,22 @@ EOF
   systemctl daemon-reload
   systemctl enable --now "$SERVICE_NAME" >/dev/null 2>&1
   systemctl restart "$SERVICE_NAME"
-fi
+}
+
+# ── Run ──────────────────────────────────────────────────────────────────────
+
+check_host
+install_node
+fetch_build
+install_deps
+
+NODE_BIN=$(command -v node)
+set_password
+
+# The service runs as root: it rewrites SINGBOX_CONFIG and drives the service
+# manager. On a single-purpose host, narrowing that would mean a doas/sudo rule
+# plus file ACLs for very little gain.
+if [ "$OS" = alpine ]; then install_service_openrc; else install_service_systemd; fi
 
 sleep 2
 info "Termine — http://$(hostname -i 2>/dev/null | awk '{print $1}'):$APP_PORT"
