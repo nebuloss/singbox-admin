@@ -108,6 +108,15 @@ if [ -n "$ADMIN_PASSWORD" ]; then
     && info "Mot de passe hache dans $APP_DIR/auth.json"
 elif [ -f "$APP_DIR/auth.json" ]; then
   info "Mot de passe existant conserve"
+elif [ -f "$APP_DIR/.env" ]; then
+  # Upgrade from a version that kept the password in clear text: hash the one
+  # already in use rather than silently leaving the interface locked.
+  OLD=$(sed -n 's/^ADMIN_PASSWORD=//p' "$APP_DIR/.env" | head -1)
+  if [ -n "$OLD" ]; then
+    "$NODE_BIN" "$APP_DIR/dist-server/reset-password.js" "$OLD" >/dev/null \
+      && info "Mot de passe existant migre vers un hachage"
+  fi
+  unset OLD
 else
   warn "Aucun mot de passe : l'interface demarrera en lecture seule"
   warn "En definir un : $NODE_BIN $APP_DIR/dist-server/reset-password.js"
