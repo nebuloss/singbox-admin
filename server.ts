@@ -183,12 +183,52 @@ const isWgTag = (tag: string) => tag.startsWith(`${WG_PREFIX}-`)
 const wgName = (tag: string) => tag.slice(WG_PREFIX.length + 1)
 
 /**
- * Which outbound the tunnelled traffic currently leaves by. Either a single
- * endpoint, or the urltest group when automatic failover is on.
+ * Which outbound the tunnelled traffic currently leaves by. Either the first
+ * profile in order, or the urltest group when automatic switching is on.
  */
 function activeTarget(cfg: Config): string | null {
   const rule = cfg.route?.rules?.find((r) => r.outbound && (isWgTag(r.outbound) || r.outbound === WG_AUTO))
   return rule?.outbound ?? null
+}
+
+const wgEndpoints = (cfg: Config) => (cfg.endpoints ?? []).filter((e) => isWgTag(e.tag))
+
+/**
+ * Rebuild routing from the profile order.
+ *
+ * Manual: the first profile in the list serves. Automatic: every profile goes
+ * into a urltest group. Note that urltest picks by latency, not by rank —
+ * sing-box has no priority mode (SagerNet/sing-box#4065), so order is only
+ * meaningful in manual mode and the UI says so.
+ */
+function applyRouting(cfg: Config, failover: boolean) {
+  cfg.route = cfg.route ?? {}
+  cfg.outbounds = (cfg.outbounds ?? []).filter((o) => (o as { tag?: string })?.tag !== WG_AUTO)
+  cfg.route.rules = (cfg.route.rules ?? []).filter(
+    (r) => !(r.outbound && (isWgTag(r.outbound) || r.outbound === WG_AUTO)),
+  )
+
+  const wgs = wgEndpoints(cfg)
+  if (wgs.length === 0) return
+
+  const auto = failover && wgs.length >= 2
+  const chosen = auto ? wgs : [wgs[0]]
+
+  if (auto) {
+    cfg.outbounds.push({
+      type: 'urltest',
+      tag: WG_AUTO,
+      outbounds: wgs.map((e) => e.tag),
+      url: 'https://www.gstatic.com/generate_204',
+      interval: '3m',
+      tolerance: 50,
+    })
+  }
+
+  // Route the union of what the selected peers accept, so a split tunnel stays
+  // split whichever profile serves.
+  const cidrs = [...new Set(chosen.flatMap((e) => e.peers?.[0]?.allowed_ips ?? []))]
+  cfg.route.rules.push({ ip_cidr: cidrs, outbound: auto ? WG_AUTO : wgs[0].tag })
 }
 
 function wireguardSummary(cfg: Config) {
@@ -210,50 +250,7 @@ function wireguardSummary(cfg: Config) {
     })
 
   const target = activeTarget(cfg)
-  const auto = (cfg.outbounds ?? []).find(
-    (o) => (o as { tag?: string })?.tag === WG_AUTO,
-  ) as { outbounds?: string[] } | undefined
-
-  return {
-    profiles,
-    active: target,
-    failover: target === WG_AUTO,
-    failoverMembers: auto?.outbounds ?? [],
-  }
-}
-
-/** Point routing at one endpoint, or at the failover group. */
-function setActive(cfg: Config, target: string | null, members: string[]) {
-  cfg.route = cfg.route ?? {}
-  cfg.outbounds = (cfg.outbounds ?? []).filter((o) => (o as { tag?: string })?.tag !== WG_AUTO)
-  cfg.route.rules = (cfg.route.rules ?? []).filter(
-    (r) => !(r.outbound && (isWgTag(r.outbound) || r.outbound === WG_AUTO)),
-  )
-  if (!target) return
-
-  const chosen =
-    target === WG_AUTO
-      ? (cfg.endpoints ?? []).filter((e) => members.includes(e.tag))
-      : (cfg.endpoints ?? []).filter((e) => e.tag === target)
-  if (chosen.length === 0) throw new Error('profil introuvable')
-
-  if (target === WG_AUTO) {
-    // urltest probes each member and picks whichever answers, which is what
-    // gives automatic recovery when one tunnel stops passing traffic.
-    cfg.outbounds.push({
-      type: 'urltest',
-      tag: WG_AUTO,
-      outbounds: chosen.map((e) => e.tag),
-      url: 'https://www.gstatic.com/generate_204',
-      interval: '3m',
-      tolerance: 50,
-    })
-  }
-
-  // Route the union of what the selected peers accept, so a split tunnel stays
-  // split whichever profile is serving.
-  const cidrs = [...new Set(chosen.flatMap((e) => e.peers?.[0]?.allowed_ips ?? []))]
-  cfg.route.rules.push({ ip_cidr: cidrs, outbound: target })
+  return { profiles, active: target, failover: target === WG_AUTO }
 }
 
 // ── Auth: one shared password, sessions held in memory. Restarting the service
@@ -401,12 +398,10 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     endpoint.tag = `${WG_PREFIX}-${slug(name)}`
 
     const cfg = readConfig()
-    const existed = (cfg.endpoints ?? []).some((e) => e.tag === endpoint.tag)
     cfg.endpoints = [...(cfg.endpoints ?? []).filter((e) => e.tag !== endpoint.tag), endpoint]
 
-    // First profile added becomes the active one; otherwise leave the choice
-    // where the operator put it.
-    if (!activeTarget(cfg) && !existed) setActive(cfg, endpoint.tag, [])
+    // Rebuild routing from the resulting order, keeping the current mode.
+    applyRouting(cfg, activeTarget(cfg) === WG_AUTO)
 
     await commit(cfg)
     res.json({ ok: true, tag: endpoint.tag })
@@ -415,17 +410,31 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
   }
 })
 
-app.post('/api/wireguard/active', requireAuth, async (req, res) => {
+app.post('/api/wireguard/order', requireAuth, async (req, res) => {
+  try {
+    const tags: string[] = Array.isArray(req.body?.tags) ? req.body.tags.map(String) : []
+    const cfg = readConfig()
+    const wgs = wgEndpoints(cfg)
+    if (tags.length !== wgs.length || !tags.every((t) => wgs.some((e) => e.tag === t)))
+      return res.status(400).json({ error: 'liste de profils incoherente' })
+
+    const others = (cfg.endpoints ?? []).filter((e) => !isWgTag(e.tag))
+    cfg.endpoints = [...others, ...tags.map((t) => wgs.find((e) => e.tag === t)!)]
+    applyRouting(cfg, activeTarget(cfg) === WG_AUTO)
+    await commit(cfg)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+
+app.post('/api/wireguard/failover', requireAuth, async (req, res) => {
   try {
     const cfg = readConfig()
-    const failover = Boolean(req.body?.failover)
-    const tag = req.body?.tag ? String(req.body.tag) : null
-    const members = Array.isArray(req.body?.members) ? req.body.members.map(String) : []
-
-    if (failover && members.length < 2)
+    const enabled = Boolean(req.body?.enabled)
+    if (enabled && wgEndpoints(cfg).length < 2)
       return res.status(400).json({ error: 'la bascule automatique demande au moins deux profils' })
-
-    setActive(cfg, failover ? WG_AUTO : tag, members)
+    applyRouting(cfg, enabled)
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
@@ -440,24 +449,11 @@ app.delete('/api/wireguard/:tag', requireAuth, async (req, res) => {
     if (!cfg.endpoints?.some((e) => e.tag === tag))
       return res.status(404).json({ error: 'profil introuvable' })
 
+    const wasAuto = activeTarget(cfg) === WG_AUTO
     cfg.endpoints = cfg.endpoints.filter((e) => e.tag !== tag)
-
-    // Deleting the profile in use would leave a rule pointing nowhere, which
-    // sing-box rejects outright: fall back to whatever remains, or to nothing.
-    const target = activeTarget(cfg)
-    const remaining = cfg.endpoints.filter((e) => isWgTag(e.tag)).map((e) => e.tag)
-    if (target === tag) {
-      setActive(cfg, remaining[0] ?? null, [])
-    } else if (target === WG_AUTO) {
-      const members = (
-        (cfg.outbounds ?? []).find((o) => (o as { tag?: string })?.tag === WG_AUTO) as
-          | { outbounds?: string[] }
-          | undefined
-      )?.outbounds?.filter((t) => t !== tag) ?? []
-      if (members.length >= 2) setActive(cfg, WG_AUTO, members)
-      else setActive(cfg, members[0] ?? remaining[0] ?? null, [])
-    }
-
+    // Routing is rebuilt from what remains: a rule pointing at a deleted
+    // endpoint is rejected by sing-box outright.
+    applyRouting(cfg, wasAuto)
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {

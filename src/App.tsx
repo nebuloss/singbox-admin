@@ -30,7 +30,6 @@ export type Wireguard = {
   profiles: Profile[]
   active: string | null
   failover: boolean
-  failoverMembers: string[]
 }
 export type State = {
   authed: boolean
@@ -351,7 +350,7 @@ function WireguardTab({
   const [formError, setFormError] = useState('')
 
   const profiles = wg?.profiles ?? []
-  const members = wg?.failoverMembers ?? []
+  const failover = Boolean(wg?.failover)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -367,12 +366,12 @@ function WireguardTab({
     }
   }
 
-  const toggleMember = (tag: string) => {
-    const next = members.includes(tag) ? members.filter((t) => t !== tag) : [...members, tag]
-    if (next.length < 2) return
-    void act(() =>
-      api('/api/wireguard/active', { method: 'POST', body: JSON.stringify({ failover: true, members: next }) }),
-    )
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= profiles.length) return
+    const tags = profiles.map((p) => p.tag)
+    const [moved] = tags.splice(from, 1)
+    tags.splice(to, 0, moved)
+    void act(() => api('/api/wireguard/order', { method: 'POST', body: JSON.stringify({ tags }) }))
   }
 
   return (
@@ -383,94 +382,69 @@ function WireguardTab({
             <h2 className="text-xl leading-7 font-normal">Sortie du trafic</h2>
             <p className="mt-1 text-sm text-on-surface-variant">
               {profiles.length
-                ? 'Choisissez par quel tunnel le trafic des appareils ressort.'
-                : 'Sans profil, le trafic sort directement par cette machine.'}
+                ? 'Le premier tunnel de la liste est utilisé. Réordonnez pour changer.'
+                : 'Sans tunnel, le trafic sort directement par cette machine.'}
             </p>
           </div>
           <TonalButton onClick={() => { setFormError(''); setAdding(true) }}>
-            <Plus /> Ajouter un profil
+            <Plus /> Ajouter
           </TonalButton>
         </div>
 
         {profiles.length > 1 && (
-          <div className="mt-5 rounded-[var(--radius-md3-m)] bg-surface-low p-4">
-            <label className="flex items-start gap-3">
-              <input
-                type="checkbox"
-                checked={Boolean(wg?.failover)}
-                disabled={busy}
-                onChange={(e) => {
-                  const on = e.target.checked
-                  void act(() =>
-                    api('/api/wireguard/active', {
-                      method: 'POST',
-                      body: JSON.stringify(
-                        on
-                          ? { failover: true, members: profiles.slice(0, 2).map((p) => p.tag) }
-                          : { tag: profiles[0].tag },
-                      ),
-                    }),
-                  )
-                }}
-                className="mt-1 size-4 accent-[var(--color-primary)]"
-              />
-              <span className="text-sm">
-                <span className="font-medium">Bascule automatique</span>
-                <span className="block text-on-surface-variant">
-                  sing-box teste les profils sélectionnés et utilise celui qui répond. Le trafic repart par un
-                  autre tunnel si l’actif cesse de fonctionner.
-                </span>
+          <label className="mt-5 flex items-start gap-3 rounded-[var(--radius-md3-m)] bg-surface-low p-4">
+            <input
+              type="checkbox"
+              checked={failover}
+              disabled={busy}
+              onChange={(e) =>
+                void act(() =>
+                  api('/api/wireguard/failover', {
+                    method: 'POST',
+                    body: JSON.stringify({ enabled: e.target.checked }),
+                  }),
+                )
+              }
+              className="mt-1 size-4 accent-[var(--color-primary)]"
+            />
+            <span className="text-sm">
+              <span className="font-medium">Basculer automatiquement si le tunnel ne répond plus</span>
+              <span className="block text-on-surface-variant">
+                sing-box teste tous les tunnels et utilise celui qui répond le plus vite. L’ordre de la liste
+                n’est alors plus suivi — il ne sert qu’en mode manuel.
               </span>
-            </label>
-
-            {wg?.failover && (
-              <div className="mt-4 flex flex-wrap gap-2 pl-7">
-                {profiles.map((p) => (
-                  <Chip key={p.tag} selected={members.includes(p.tag)} onClick={() => toggleMember(p.tag)}>
-                    {members.includes(p.tag) && <Check />}
-                    {p.name}
-                  </Chip>
-                ))}
-              </div>
-            )}
-          </div>
+            </span>
+          </label>
         )}
       </Card>
 
       {profiles.length ? (
         <ul className="flex flex-col gap-4">
-          {profiles.map((p) => {
-            const active = !wg?.failover && wg?.active === p.tag
-            const inGroup = Boolean(wg?.failover) && members.includes(p.tag)
+          {profiles.map((p, i) => {
+            const serving = failover || i === 0
             return (
               <li
                 key={p.tag}
                 className={`rounded-[var(--radius-md3-xl)] p-5 ${
-                  active || inGroup ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container'
+                  serving ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container'
                 }`}
               >
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-full bg-surface-low text-xs font-medium text-on-surface-variant">
+                      {i + 1}
+                    </span>
                     <p className="text-lg leading-6 font-medium">{p.name}</p>
-                    {active && <Chip tone="ok">actif</Chip>}
-                    {inGroup && <Chip tone="ok">dans le groupe</Chip>}
+                    {!failover && i === 0 && <Chip tone="ok">actif</Chip>}
+                    {failover && <Chip tone="ok">candidat</Chip>}
                   </div>
                   <div className="flex items-center gap-1">
-                    {!active && !wg?.failover && (
-                      <TextButton
-                        disabled={busy}
-                        onClick={() =>
-                          void act(() =>
-                            api('/api/wireguard/active', {
-                              method: 'POST',
-                              body: JSON.stringify({ tag: p.tag }),
-                            }),
-                          )
-                        }
-                      >
-                        Activer
-                      </TextButton>
-                    )}
+                    <IconButton label="Monter" onClick={() => move(i, i - 1)}>
+                      <path d="M7.4 15.4 12 10.8l4.6 4.6L18 14l-6-6-6 6z" />
+                    </IconButton>
+                    <IconButton label="Descendre" onClick={() => move(i, i + 1)}>
+                      <path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z" />
+                    </IconButton>
                     <TextButton tone="error" onClick={() => setPending(p)}>
                       Supprimer
                     </TextButton>
@@ -489,13 +463,13 @@ function WireguardTab({
           })}
         </ul>
       ) : (
-        <Empty>Aucun profil WireGuard.</Empty>
+        <Empty>Aucun tunnel WireGuard.</Empty>
       )}
 
       {adding && (
-        <Modal title="Nouveau profil WireGuard" wide onClose={() => setAdding(false)}>
+        <Modal title="Nouveau tunnel WireGuard" wide onClose={() => setAdding(false)}>
           <form className="flex flex-col gap-4" onSubmit={submit}>
-            <Field label="Nom du profil" value={name} onChange={setName} autoFocus />
+            <Field label="Nom du tunnel" value={name} onChange={setName} autoFocus />
             <textarea
               rows={11}
               value={conf}
@@ -519,16 +493,16 @@ function WireguardTab({
 
       {pending && (
         <ConfirmModal
-          title="Supprimer ce profil ?"
+          title="Supprimer ce tunnel ?"
           busy={busy}
           body={
             <>
-              Le profil <strong className="text-on-surface">{pending.name}</strong> et sa clé privée seront
+              Le tunnel <strong className="text-on-surface">{pending.name}</strong> et sa clé privée seront
               retirés de la configuration.
-              {wg?.active === pending.tag && (
+              {profiles[0]?.tag === pending.tag && !failover && (
                 <span className="mt-2 block">
-                  C’est le profil actif : le trafic basculera sur un autre profil s’il en reste, sinon il
-                  ressortira directement par cette machine.
+                  C’est celui en service : le trafic passera au suivant de la liste, ou ressortira directement
+                  par cette machine s’il n’en reste aucun.
                 </span>
               )}
             </>
