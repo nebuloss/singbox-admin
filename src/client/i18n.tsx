@@ -53,11 +53,12 @@ const EN: Record<string, string> = {
   'Copier l’abonnement': 'Copy the subscription',
   'Scannez : le profil s’installe et se met à jour tout seul.':
     'Scan it: the profile installs itself and keeps itself up to date.',
-  'Abonnement — importez ceci, le DNS est compris':
-    'Subscription — import this one, DNS included',
+  'Abonnement — à importer, il se met à jour tout seul':
+    'Subscription — import this one, it keeps itself up to date',
   'Une seule règle : un chemin en forme d’identifiant est un appareil qui demande son profil, tout le reste appartient au tunnel. Le proxy ne connaît qu’une forme, jamais le chemin du tunnel — c’est ce qui permet de régénérer celui-ci sans rien changer ici.':
     'One rule: a path shaped like an identifier is a device asking for its profile, everything else belongs to the tunnel. The proxy is told a shape, never the tunnel path — which is what allows regenerating it without touching anything here.',
-  'Lien simple — sans réglage DNS': 'Plain link — carries no DNS setting',
+  'Lien simple — pour un client qui ne prend que des liens':
+    'Plain link — for a client that only understands links',
   Copié: 'Copied',
 
   // WireGuard
@@ -70,7 +71,7 @@ const EN: Record<string, string> = {
   'Glisser pour réordonner': 'Drag to reorder',
   'en service': 'in use',
   désactivé: 'disabled',
-  'identifiant en cours de renouvellement': 'credential being replaced',
+  renouvellement: 'renewing',
   Monter: 'Move up',
   Descendre: 'Move down',
   Activer: 'Enable',

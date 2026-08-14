@@ -382,21 +382,22 @@ function UserCard({
           <div className="size-32 rounded-[var(--radius-md3-m)] bg-white p-2 [&>div>svg]:size-full">
             <div dangerouslySetInnerHTML={{ __html: user.qr }} />
           </div>
-          <p className="max-w-32 text-center text-[11px] leading-tight text-on-surface-variant">
+          <p className="max-w-56 text-center text-[11px] leading-tight text-balance text-on-surface-variant sm:max-w-32">
             {t('Scannez : le profil s’installe et se met à jour tout seul.')}
           </p>
         </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <p className="truncate text-lg leading-6 font-medium">{user.name ?? t('sans nom')}</p>
-                {!user.enabled && <Chip>{t('désactivé')}</Chip>}
-                {user.credentials > 1 && <Chip>{t('identifiant en cours de renouvellement')}</Chip>}
-              </div>
-              <p className="mt-0.5 font-mono text-xs text-on-surface-variant">{user.token.slice(0, 13)}…</p>
+        <div className="flex min-w-0 flex-1 flex-col gap-4">
+          {/* One line, always: a name that truncates and controls that do not.
+              State goes on its own row below, where it can wrap without
+              squeezing the name off the card on a narrow screen. */}
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-lg leading-6 font-medium">{user.name ?? t('sans nom')}</p>
+              <p className="mt-0.5 truncate font-mono text-xs text-on-surface-variant">
+                {user.token.slice(0, 13)}…
+              </p>
             </div>
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="-mr-2 flex shrink-0 items-center">
               <IconButton label={t('Renommer')} onClick={onRename}>
                 <Pencil />
               </IconButton>
@@ -412,18 +413,25 @@ function UserCard({
             </div>
           </div>
 
+          {(!user.enabled || user.credentials > 1) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {!user.enabled && <Chip>{t('désactivé')}</Chip>}
+              {user.credentials > 1 && <Chip>{t('renouvellement')}</Chip>}
+            </div>
+          )}
+
           {!user.enabled && (
-            <p className="text-xs text-on-surface-variant">
+            <p className="-mt-1 text-xs text-on-surface-variant">
               {t('Le lien reste valide : réactiver l’appareil suffit à le remettre en service.')}
             </p>
           )}
           <Copyable
-            label={t('Abonnement — importez ceci, le DNS est compris')}
+            label={t('Abonnement — à importer, il se met à jour tout seul')}
             value={user.sub}
             copyLabel={t('Copier l’abonnement')}
           />
           <Copyable
-            label={t('Lien simple — sans réglage DNS')}
+            label={t('Lien simple — pour un client qui ne prend que des liens')}
             value={user.link}
             copyLabel={t('Copier le lien')}
             rows={3}
