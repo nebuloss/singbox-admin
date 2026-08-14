@@ -317,9 +317,10 @@ function proxySnippet(cfg: Config, appPort: number): string {
     '  proxy_http_version 1.1;',
     '  proxy_read_timeout 86400s;',
     '  proxy_send_timeout 86400s;',
-    '  # Un chemin que sing-box refuse ressort en page quelconque, comme le reste.',
+    "  # Un refus de sing-box ressort en 404 comme le reste : meme corps, meme",
+    '  # statut, quelle que soit la raison.',
     '  proxy_intercept_errors on;',
-    '  error_page 400 401 403 404 500 502 503 504 = @vitrine;',
+    '  error_page 400 401 403 404 500 502 503 504 =404 @vitrine;',
     '}',
     '',
     'location @vitrine {',
@@ -1054,7 +1055,7 @@ app.get(`/:uuid(${UUID_PATH})`, (req, res) => {
  * and its API are simply not mounted here, so no request arriving from outside
  * can reach them however it is shaped.
  */
-const COVER = `<!doctype html>
+const LANDING = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -1078,8 +1079,25 @@ const COVER = `<!doctype html>
 </html>
 `
 
+/**
+ * What a host like this owes a request for something it does not have: a 404,
+ * like any other origin. Answering everything with the front page would be the
+ * tell — it is the one behaviour no real asset host has.
+ *
+ * Uniform all the same: every address that is not a profile gets this exact
+ * body and status, the tunnel's own included when asked without an upgrade.
+ */
+const NOT_FOUND = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>404 Not Found</title></head>
+<body><h1>404 Not Found</h1><p>No such asset.</p></body>
+</html>
+`
+
 const publicApp = express()
 publicApp.disable('x-powered-by')
+
+publicApp.get('/', (_req, res) => res.type('html').send(LANDING))
 
 publicApp.get(`/:uuid(${UUID_PATH})`, (req, res) => {
   try {
@@ -1087,7 +1105,7 @@ publicApp.get(`/:uuid(${UUID_PATH})`, (req, res) => {
     const user = allUsers(cfg).find((u) => u.uuid === req.params.uuid)
     // An identifier nobody holds is answered exactly like any other address:
     // there is no reply that says "not this one".
-    if (!user) return res.type('html').send(COVER)
+    if (!user) return res.status(404).type('html').send(NOT_FOUND)
 
     const wsPath = liveInbound(cfg).transport?.path ?? '/'
     const name = readAdminConfig(ADMIN_CONFIG).names[user.uuid] ?? user.uuid.slice(0, 8)
@@ -1097,11 +1115,11 @@ publicApp.get(`/:uuid(${UUID_PATH})`, (req, res) => {
       .type('application/json')
       .send(JSON.stringify(clientProfile(user, cfg, wsPath, publicBase(req)), null, 2))
   } catch {
-    res.type('html').send(COVER)
+    res.status(404).type('html').send(NOT_FOUND)
   }
 })
 
-publicApp.use((_req, res) => res.type('html').send(COVER))
+publicApp.use((_req, res) => res.status(404).type('html').send(NOT_FOUND))
 
 publicApp.listen(PUBLIC_PORT_LISTEN, () => {
   console.log(`vitrine publique on :${PUBLIC_PORT_LISTEN} — profils et page de couverture`)
