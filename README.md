@@ -16,8 +16,23 @@ for why.
 
 ## What it manages
 
-**Devices.** Adding one generates a UUID and gives you a `vless://` link and a
-QR code. There are two different ways to take access away:
+**Devices.** Adding one generates a UUID and gives you two ways to set a client
+up, both on the card:
+
+- a **subscription URL**, which serves a full sing-box profile — the tunnel's
+  own resolver reached through the proxy, and the tunnel's networks in the
+  routing. This is what the QR code carries, so a scan leaves the device
+  configured rather than merely connected.
+- the plain `vless://` **link**, for a client that only understands links. It
+  carries no DNS: the format has no field for one, which is why a device set up
+  from a link resolves internal names however it likes, and usually fails them.
+
+The subscription URL is built from the address you reached the interface on, so
+it works wherever the interface is published — and only there. Import it once
+from a network that can reach it; the profile then works from anywhere, only
+its automatic refresh needs that address again.
+
+There are two different ways to take access away:
 
 | | effect | reversible |
 |---|---|---|
