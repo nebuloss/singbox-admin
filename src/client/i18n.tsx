@@ -116,6 +116,16 @@ const EN: Record<string, string> = {
   arrêté: 'stopped',
   Version: 'Version',
   'Nom public': 'Public hostname',
+  'Adresse des abonnements': 'Subscription address',
+  'Adresse publique': 'Public address',
+  'Celle par laquelle vous avez ouvert cette interface.':
+    'The one you opened this interface on.',
+  'C’est l’adresse que les appareils utiliseront pour récupérer leur profil : elle doit être joignable depuis eux.':
+    'This is the address devices will fetch their profile from: it has to be reachable from them.',
+  'Attendu : https://nom.example.com': 'Expected: https://name.example.com',
+  'Laissez vide pour utiliser l’adresse par laquelle vous ouvrez cette interface. Publiez de préférence le seul chemin /sub/ sur ce nom : l’interface d’administration n’a rien à faire sur Internet.':
+    'Leave empty to use the address you open this interface on. Prefer publishing only the /sub/ path on that name: the admin interface has no business on the internet.',
+  'adresse invalide': 'invalid address',
   'Chemin WebSocket': 'WebSocket path',
   Régénérer: 'Regenerate',
   'Régénérer le chemin ?': 'Regenerate the path?',

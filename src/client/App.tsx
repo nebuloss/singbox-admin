@@ -42,6 +42,7 @@ export type State = {
   users?: User[]
   service?: { running: boolean; version: string }
   tunnel?: { host: string; port: number; path: string }
+  publicUrl?: string | null
   wireguard?: Wireguard
 }
 
@@ -975,6 +976,7 @@ function SettingsTab({
   const t = useT()
   const [open, setOpen] = useState(false)
   const [rotating, setRotating] = useState(false)
+  const [address, setAddress] = useState(false)
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -1006,6 +1008,21 @@ function SettingsTab({
         </div>
       </Card>
 
+      <Card className="mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-56 flex-1">
+            <h2 className="text-xl leading-7 font-normal">{t('Adresse des abonnements')}</h2>
+            <p className="mt-1 text-sm break-all text-on-surface-variant">
+              {state.publicUrl ?? t('Celle par laquelle vous avez ouvert cette interface.')}
+            </p>
+            <p className="mt-2 text-xs text-on-surface-variant">
+              {t('C’est l’adresse que les appareils utiliseront pour récupérer leur profil : elle doit être joignable depuis eux.')}
+            </p>
+          </div>
+          <TonalButton disabled={busy} onClick={() => setAddress(true)}>{t('Modifier')}</TonalButton>
+        </div>
+      </Card>
+
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -1017,6 +1034,10 @@ function SettingsTab({
           <TonalButton onClick={() => setOpen(true)}>{t('Changer')}</TonalButton>
         </div>
       </Card>
+
+      {address && (
+        <PublicUrlModal current={state.publicUrl ?? ''} act={act} onClose={() => setAddress(false)} />
+      )}
 
       {rotating && (
         <ConfirmModal
@@ -1066,6 +1087,44 @@ function SettingsTab({
         </FormModal>
       )}
     </>
+  )
+}
+
+function PublicUrlModal({
+  current,
+  act,
+  onClose,
+}: {
+  current: string
+  act: (fn: () => Promise<unknown>) => Promise<void>
+  onClose: () => void
+}) {
+  const t = useT()
+  const [value, setValue] = useState(current)
+  const trimmed = value.trim()
+  const malformed = trimmed.length > 0 && !/^https?:\/\/[^\s/]+/i.test(trimmed)
+
+  return (
+    <FormModal
+      title={t('Adresse des abonnements')}
+      disabled={malformed || trimmed === current}
+      onClose={onClose}
+      onSubmit={async () => {
+        await api('/api/settings', { method: 'POST', body: JSON.stringify({ publicUrl: trimmed }) })
+        await act(async () => {})
+      }}
+    >
+      <Field
+        label={t('Adresse publique')}
+        value={value}
+        onChange={setValue}
+        autoFocus
+        error={malformed ? t('Attendu : https://nom.example.com') : undefined}
+      />
+      <p className="text-xs text-on-surface-variant">
+        {t('Laissez vide pour utiliser l’adresse par laquelle vous ouvrez cette interface. Publiez de préférence le seul chemin /sub/ sur ce nom : l’interface d’administration n’a rien à faire sur Internet.')}
+      </p>
+    </FormModal>
   )
 }
 

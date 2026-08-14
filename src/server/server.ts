@@ -244,8 +244,18 @@ function clientProfile(user: User, cfg: Config, wsPath: string) {
   }
 }
 
-/** Built from how the interface was reached, so the link works where it does. */
+/**
+ * Where a device should fetch its profile.
+ *
+ * Defaults to however the interface was reached, which is right when that
+ * address is reachable from the device. It rarely is: the interface belongs on
+ * an internal network, and the phone is not on it. Hence the setting — publish
+ * the `/sub/` path alone on a public name and put that name here, rather than
+ * exposing an interface guarded by one shared password.
+ */
 function subscriptionUrl(req: express.Request, uuid: string): string {
+  const configured = readAdminConfig(ADMIN_CONFIG).publicUrl
+  if (configured) return `${configured.replace(/\/+$/, '')}/sub/${uuid}`
   const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0] || req.protocol
   return `${proto}://${req.get('host')}/sub/${uuid}`
 }
@@ -576,6 +586,7 @@ app.get('/api/state', async (req, res) => {
       users,
       service: { running: /started|running|active/i.test(status.out), version },
       tunnel: { host: PUBLIC_HOST, port: PUBLIC_PORT, path: wsPath },
+      publicUrl: readAdminConfig(ADMIN_CONFIG).publicUrl,
       wireguard: wireguardSummary(cfg, names),
     })
   } catch (e) {
@@ -698,6 +709,26 @@ app.post('/api/users/:uuid/enabled', requireAuth, async (req, res) => {
  * The reverse proxy is deliberately not consulted. It forwards everything and
  * lets sing-box decide, so the path is known here and nowhere else.
  */
+app.post('/api/settings', requireAuth, (req, res) => {
+  const raw = String(req.body?.publicUrl ?? '').trim()
+  if (raw) {
+    let url: URL
+    try {
+      url = new URL(raw)
+    } catch {
+      return res.status(400).json({ error: 'adresse invalide' })
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:')
+      return res.status(400).json({ error: 'adresse invalide' })
+  }
+  try {
+    updateAdminConfig(ADMIN_CONFIG, (c) => ({ ...c, publicUrl: raw ? raw.replace(/\/+$/, '') : null }))
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: `ecriture impossible : ${(e as Error).message}` })
+  }
+})
+
 app.post('/api/tunnel/path', requireAuth, async (req, res) => {
   try {
     const cfg = readConfig()

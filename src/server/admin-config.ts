@@ -28,9 +28,11 @@ const COST = 16384 // scrypt N; ~100ms on modest hardware
 export type Password = { hash: string; updated: string }
 /** Keyed by device UUID, or `wg:<id>` for a tunnel — identifiers that never change. */
 export type Names = Record<string, string>
-export type AdminConfig = { password: Password | null; names: Names }
+/** Where devices should fetch their profile, when that is not where the
+ *  interface itself answers — see the note on subscriptions in the README. */
+export type AdminConfig = { password: Password | null; names: Names; publicUrl: string | null }
 
-const EMPTY: AdminConfig = { password: null, names: {} }
+const EMPTY: AdminConfig = { password: null, names: {}, publicUrl: null }
 
 /** Format: scrypt$<N>$<salt-hex>$<derived-hex> */
 export function hashPassword(password: string): Password {
@@ -62,9 +64,10 @@ export function readAdminConfig(file: string): AdminConfig {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'))
     if (!parsed || typeof parsed !== 'object') return EMPTY
-    const { password, names } = parsed as Partial<AdminConfig>
+    const { password, names, publicUrl } = parsed as Partial<AdminConfig>
     return {
       password: typeof password?.hash === 'string' ? password : null,
+      publicUrl: typeof publicUrl === 'string' && publicUrl ? publicUrl : null,
       names:
         names && typeof names === 'object' && !Array.isArray(names)
           ? Object.fromEntries(
