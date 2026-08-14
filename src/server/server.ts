@@ -193,7 +193,7 @@ function linkFor(user: User, name: string | undefined, wsPath: string): string {
  * here is the tunnel's own, reached through the proxy, so an internal name
  * gets its internal answer wherever the device happens to be.
  */
-function clientProfile(user: User, name: string | undefined, cfg: Config, wsPath: string) {
+function clientProfile(user: User, cfg: Config, wsPath: string) {
   const serving = wgEndpoints(cfg).find((e) => isEnabled(e.tag))
   const resolver = serving ? dnsFor(cfg, serving)?.server : undefined
   const internal = serving?.peers?.[0]?.allowed_ips ?? []
@@ -241,8 +241,6 @@ function clientProfile(user: User, name: string | undefined, cfg: Config, wsPath
     experimental: {
       cache_file: { enabled: true },
     },
-    // Not read by sing-box; it is what the device shows in its profile list.
-    remarks: name || user.uuid.slice(0, 8),
   }
 }
 
@@ -924,8 +922,12 @@ app.get('/sub/:uuid', (req, res) => {
     if (!user) return res.status(404).json({ error: 'inconnu' })
 
     const wsPath = liveInbound(cfg).transport?.path ?? '/'
-    const name = readAdminConfig(ADMIN_CONFIG).names[user.uuid]
-    res.type('application/json').send(JSON.stringify(clientProfile(user, name, cfg, wsPath), null, 2))
+    // The name belongs in a header, not in the configuration: sing-box rejects
+    // any key it does not know, and clients read the title from here.
+    const name = readAdminConfig(ADMIN_CONFIG).names[user.uuid] ?? user.uuid.slice(0, 8)
+    res.set('profile-title', `base64:${Buffer.from(name, 'utf8').toString('base64')}`)
+    res.set('profile-update-interval', '24')
+    res.type('application/json').send(JSON.stringify(clientProfile(user, cfg, wsPath), null, 2))
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
   }
