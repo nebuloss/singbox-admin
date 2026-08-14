@@ -16,6 +16,11 @@
 
 set -eu
 
+# Debian's /bin/sh omits /usr/local/bin from PATH, where sing-box is installed
+# on that distribution — without this the check below reports it as missing.
+PATH="/usr/local/bin:$PATH"
+export PATH
+
 APP_DIR="${APP_DIR:-/opt/singbox-admin}"
 APP_PORT="${APP_PORT:-3000}"
 NODE_VERSION="${NODE_VERSION:-22}"

@@ -16,6 +16,12 @@
 
 set -eu
 
+# Debian's /bin/sh starts with PATH=/sbin:/bin:/usr/sbin:/usr/bin — no
+# /usr/local/bin. Without this, the binary we install below is invisible to the
+# rest of this very script.
+PATH="/usr/local/bin:$PATH"
+export PATH
+
 CONFIG="${CONFIG:-/etc/sing-box/config.json}"
 LISTEN_PORT="${LISTEN_PORT:-8081}"
 FIRST_CLIENT="${FIRST_CLIENT:-premier-appareil}"
