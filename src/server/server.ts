@@ -58,7 +58,7 @@ type Inbound = {
   tag?: string
   listen?: string
   users?: User[]
-  transport?: { path?: string }
+  transport?: { type?: string; path?: string }
 }
 type Peer = {
   address: string
@@ -546,6 +546,32 @@ app.post('/api/users/:uuid/enabled', requireAuth, async (req, res) => {
     res.json({ ok: true })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+
+/**
+ * Draw a new secret path.
+ *
+ * Worth doing when the old one may have leaked — from a lost device, or a
+ * proxy that logged it. It costs every device its link, since the path travels
+ * in the link, so nothing here does it on a timer: rotation is a response, not
+ * hygiene.
+ *
+ * The reverse proxy is deliberately not consulted. It forwards everything and
+ * lets sing-box decide, so the path is known here and nowhere else.
+ */
+app.post('/api/tunnel/path', requireAuth, async (req, res) => {
+  try {
+    const cfg = readConfig()
+    const inbound = liveInbound(cfg)
+    if (!inbound.transport || inbound.transport.type !== 'ws')
+      return res.status(400).json({ error: 'l inbound n utilise pas un transport ws' })
+
+    inbound.transport.path = `/${crypto.randomBytes(12).toString('hex')}`
+    await commit(cfg)
+    res.json({ ok: true, path: inbound.transport.path })
+  } catch (e) {
+    res.status(500).json({ error: String((e as Error).message) })
   }
 })
 

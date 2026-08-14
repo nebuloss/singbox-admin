@@ -110,6 +110,14 @@ const EN: Record<string, string> = {
   Version: 'Version',
   'Nom public': 'Public hostname',
   'Chemin WebSocket': 'WebSocket path',
+  Régénérer: 'Regenerate',
+  'Régénérer le chemin ?': 'Regenerate the path?',
+  'Le chemin ne sert qu’à ce qu’un scan du nom d’hôte ne trouve rien : c’est l’identifiant de l’appareil qui authentifie.':
+    'The path only exists so a scan of the hostname finds nothing: it is the device identifier that authenticates.',
+  'Tous les appareils perdront la connexion jusqu’à ce qu’ils réimportent leur lien : le chemin voyage dans le lien. À faire si vous pensez qu’il a fuité, pas par habitude.':
+    'Every device loses its connection until it imports its link again, because the path travels in the link. Do this if you believe it leaked, not as a routine.',
+  'Le reverse proxy n’a rien à changer : il transmet tout et laisse sing-box décider.':
+    'The reverse proxy needs no change: it forwards everything and lets sing-box decide.',
   'Accès à cette interface.': 'Access to this interface.',
   'Modifié — les autres sessions ont été fermées.':
     'Changed — every other session was signed out.',
@@ -164,6 +172,7 @@ const EN: Record<string, string> = {
   'tunnel introuvable': 'no such tunnel',
   'profil introuvable': 'no such tunnel',
   'tunnel sans pair': 'that tunnel has no peer',
+  'l inbound n utilise pas un transport ws': 'that inbound does not use a ws transport',
   'adresse du pair manquante': 'peer address missing',
   'port du pair invalide': 'invalid peer port',
   'cle publique du pair manquante': 'peer public key missing',

@@ -212,7 +212,7 @@ export default function App() {
         {tab === 'appareils' && <DevicesTab state={state} busy={busy} act={act} />}
         {tab === 'wireguard' && <WireguardTab wg={state.wireguard} busy={busy} act={act} />}
         {tab === 'applications' && <AppsTab />}
-        {tab === 'parametres' && <SettingsTab state={state} />}
+        {tab === 'parametres' && <SettingsTab state={state} busy={busy} act={act} />}
       </main>
 
       {error && <ErrorModal message={error} onClose={() => setError('')} />}
@@ -924,9 +924,18 @@ function AppsTab() {
 
 /* ── Paramètres ──────────────────────────────────────────────────────────── */
 
-function SettingsTab({ state }: { state: State }) {
+function SettingsTab({
+  state,
+  busy,
+  act,
+}: {
+  state: State
+  busy: boolean
+  act: (fn: () => Promise<unknown>) => Promise<void>
+}) {
   const t = useT()
   const [open, setOpen] = useState(false)
+  const [rotating, setRotating] = useState(false)
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -948,6 +957,14 @@ function SettingsTab({ state }: { state: State }) {
             <Row label={t('Chemin WebSocket')}>{state.tunnel?.path}</Row>
           </tbody>
         </table>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+          <p className="max-w-md text-xs text-on-surface-variant">
+            {t('Le chemin ne sert qu’à ce qu’un scan du nom d’hôte ne trouve rien : c’est l’identifiant de l’appareil qui authentifie.')}
+          </p>
+          <TonalButton disabled={busy} onClick={() => setRotating(true)}>
+            {t('Régénérer')}
+          </TonalButton>
+        </div>
       </Card>
 
       <Card>
@@ -961,6 +978,27 @@ function SettingsTab({ state }: { state: State }) {
           <TonalButton onClick={() => setOpen(true)}>{t('Changer')}</TonalButton>
         </div>
       </Card>
+
+      {rotating && (
+        <ConfirmModal
+          title={t('Régénérer le chemin ?')}
+          busy={busy}
+          confirmLabel={t('Régénérer')}
+          body={
+            <>
+              {t('Tous les appareils perdront la connexion jusqu’à ce qu’ils réimportent leur lien : le chemin voyage dans le lien. À faire si vous pensez qu’il a fuité, pas par habitude.')}
+              <span className="mt-2 block">
+                {t('Le reverse proxy n’a rien à changer : il transmet tout et laisse sing-box décider.')}
+              </span>
+            </>
+          }
+          onClose={() => setRotating(false)}
+          onConfirm={() => {
+            setRotating(false)
+            void act(() => api('/api/tunnel/path', { method: 'POST' }))
+          }}
+        />
+      )}
 
       {open && (
         <FormModal
