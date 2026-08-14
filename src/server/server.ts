@@ -16,6 +16,7 @@ import fs from 'fs'
 import os from 'os'
 import crypto from 'crypto'
 import { execFile } from 'child_process'
+import dns from 'dns'
 import QRCode from 'qrcode'
 import {
   readAdminConfig,
@@ -282,7 +283,36 @@ function linkFor(uuid: string, name: string | undefined, wsPath: string, base: P
  * rather than resolving them itself; a client in TUN mode may do the latter,
  * and then its own resolver has to be pointed at the tunnel's.
  */
-function clientProfile(uuid: string, cfg: Config, wsPath: string, base: PublicBase) {
+/**
+ * The tunnel's address as a number, resolved here rather than on the device.
+ *
+ * A device on a captive network can usually reach anything but is often unable
+ * to ask a resolver of its own choosing: the network hands you one and drops
+ * UDP/53 to everywhere else. A client that insists on its own resolver simply
+ * times out — which is exactly the difference between this tunnel and plain
+ * WireGuard, which dials a number and never asks anyone anything.
+ *
+ * The hostname stays as the TLS name, so the certificate still matches. If the
+ * address changes, a profile is stale until its next refresh — which is why
+ * this is done for the profile, that refreshes itself, and not for the link,
+ * which is pasted once and never looks back.
+ */
+let addressCache: { host: string; ip: string; at: number } | null = null
+
+async function publicAddress(host: string): Promise<string> {
+  if (addressCache?.host === host && Date.now() - addressCache.at < 60_000) return addressCache.ip
+  try {
+    const { address } = await dns.promises.lookup(host, { family: 4 })
+    addressCache = { host, ip: address, at: Date.now() }
+    return address
+  } catch {
+    // Unresolvable from here is no reason to serve nothing: the device may
+    // well manage where this host could not.
+    return host
+  }
+}
+
+function clientProfile(uuid: string, cfg: Config, wsPath: string, base: PublicBase, server: string) {
   const serving = wgEndpoints(cfg).find((e) => isEnabled(e.tag))
   const internal = serving?.peers?.[0]?.allowed_ips ?? []
 
@@ -311,7 +341,7 @@ function clientProfile(uuid: string, cfg: Config, wsPath: string, base: PublicBa
       {
         type: 'vless',
         tag: 'proxy',
-        server: base.host,
+        server,
         server_port: base.port,
         uuid,
         tls: { enabled: true, server_name: base.host },
@@ -1169,9 +1199,16 @@ publicApp.get(`/:token(${UUID_PATH})`, async (req, res) => {
     const name = device.name || req.params.token.slice(0, 8)
     res.set('profile-title', `base64:${Buffer.from(name, 'utf8').toString('base64')}`)
     res.set('profile-update-interval', String(REFRESH_HOURS))
+    const base = publicBase(req)
     res
       .type('application/json')
-      .send(JSON.stringify(clientProfile(uuid, cfg, wsPath, publicBase(req)), null, 2))
+      .send(
+        JSON.stringify(
+          clientProfile(uuid, cfg, wsPath, base, await publicAddress(base.host)),
+          null,
+          2,
+        ),
+      )
   } catch {
     res.status(404).type('html').send(NOT_FOUND)
   }
