@@ -69,7 +69,7 @@ type Peer = {
   persistent_keepalive_interval?: number
 }
 type Endpoint = { type: string; tag: string; address: string[]; private_key: string; peers: Peer[] }
-type Rule = { ip_cidr?: string[]; outbound?: string }
+type Rule = { ip_cidr?: string[]; outbound?: string; action?: string; server?: string }
 type DnsServer = { type?: string; tag?: string; server?: string; detour?: string }
 type Config = {
   inbounds?: Inbound[]
@@ -307,11 +307,21 @@ function activeTarget(cfg: Config): string | null {
  */
 function applyRouting(cfg: Config, on: boolean) {
   cfg.route = cfg.route ?? {}
-  cfg.route.rules = (cfg.route.rules ?? []).filter((r) => !(r.outbound && isWgTag(r.outbound)))
+  cfg.route.rules = (cfg.route.rules ?? []).filter(
+    (r) => !(r.outbound && isWgTag(r.outbound)) && r.action !== 'resolve',
+  )
 
   if (!on) return
   const first = wgEndpoints(cfg).find((e) => isEnabled(e.tag))
   if (!first) return
+
+  // Routing matches on the destination address, and a client sends a name.
+  // Without resolving first, an ip_cidr rule cannot match and the connection
+  // leaves by `direct` — which is how internal names ended up unreachable even
+  // once they resolved correctly. The resolver has to be named here too: left
+  // implicit, this action does not use default_domain_resolver.
+  const resolver = dnsFor(cfg, first)?.tag
+  if (resolver) cfg.route.rules.push({ action: 'resolve', server: resolver })
 
   // Route exactly what the peer accepts, so a split tunnel stays split.
   cfg.route.rules.push({ ip_cidr: first.peers?.[0]?.allowed_ips ?? [], outbound: first.tag })
