@@ -122,20 +122,23 @@ export function IconButton({
   children,
   label,
   onClick,
+  disabled,
   tone,
 }: {
   children: React.ReactNode
   label: string
   onClick?: () => void
+  disabled?: boolean
   tone?: 'error'
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-label={label}
       title={label}
-      className={`state-layer grid size-10 shrink-0 place-items-center rounded-[var(--radius-md3-full)] ${
+      className={`state-layer grid size-10 shrink-0 place-items-center rounded-[var(--radius-md3-full)] disabled:pointer-events-none disabled:opacity-38 ${
         tone === 'error' ? 'text-error' : 'text-on-surface-variant'
       }`}
     >

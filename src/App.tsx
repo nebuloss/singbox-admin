@@ -476,10 +476,13 @@ function WireguardTab({
         <ul className="flex flex-col gap-4">
           {profiles.map((p, i) => {
             const serving = on && firstEnabled?.tag === p.tag
+            // Nothing to reorder against with a single tunnel, so the whole
+            // affordance goes away rather than sitting there inert.
+            const orderable = profiles.length > 1
             return (
               <li
                 key={p.tag}
-                draggable
+                draggable={orderable}
                 onDragStart={() => setDragging(i)}
                 onDragOver={(e) => {
                   e.preventDefault()
@@ -498,15 +501,17 @@ function WireguardTab({
               >
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <span
-                      className="hidden cursor-grab text-on-surface-variant active:cursor-grabbing sm:block"
-                      title={t('Glisser pour réordonner')}
-                      aria-hidden
-                    >
-                      <svg viewBox="0 0 24 24" className="size-5 fill-current">
-                        <path d="M9 4h2v2H9V4zm4 0h2v2h-2V4zM9 9h2v2H9V9zm4 0h2v2h-2V9zm-4 5h2v2H9v-2zm4 0h2v2h-2v-2zm-4 5h2v2H9v-2zm4 0h2v2h-2v-2z" />
-                      </svg>
-                    </span>
+                    {orderable && (
+                      <span
+                        className="hidden cursor-grab text-on-surface-variant active:cursor-grabbing sm:block"
+                        title={t('Glisser pour réordonner')}
+                        aria-hidden
+                      >
+                        <svg viewBox="0 0 24 24" className="size-5 fill-current">
+                          <path d="M9 4h2v2H9V4zm4 0h2v2h-2V4zM9 9h2v2H9V9zm4 0h2v2h-2V9zm-4 5h2v2H9v-2zm4 0h2v2h-2v-2zm-4 5h2v2H9v-2zm4 0h2v2h-2v-2z" />
+                        </svg>
+                      </span>
+                    )}
                     <span className="grid size-7 shrink-0 place-items-center rounded-full bg-surface-low text-xs font-medium text-on-surface-variant">
                       {i + 1}
                     </span>
@@ -515,12 +520,24 @@ function WireguardTab({
                     {!p.enabled && <Chip>{t('désactivé')}</Chip>}
                   </div>
                   <div className="flex items-center gap-1">
-                    <IconButton label={t('Monter')} onClick={() => move(i, i - 1)}>
-                      <path d="M7.4 15.4 12 10.8l4.6 4.6L18 14l-6-6-6 6z" />
-                    </IconButton>
-                    <IconButton label={t('Descendre')} onClick={() => move(i, i + 1)}>
-                      <path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z" />
-                    </IconButton>
+                    {orderable && (
+                      <>
+                        <IconButton
+                          label={t('Monter')}
+                          disabled={busy || i === 0}
+                          onClick={() => move(i, i - 1)}
+                        >
+                          <path d="M7.4 15.4 12 10.8l4.6 4.6L18 14l-6-6-6 6z" />
+                        </IconButton>
+                        <IconButton
+                          label={t('Descendre')}
+                          disabled={busy || i === profiles.length - 1}
+                          onClick={() => move(i, i + 1)}
+                        >
+                          <path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z" />
+                        </IconButton>
+                      </>
+                    )}
                     <TextButton tone="error" onClick={() => setPending(p)}>
                       {t('Supprimer')}
                     </TextButton>
