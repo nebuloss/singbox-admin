@@ -16,6 +16,7 @@
   "include": [
     "server.ts",
     "auth.ts",
+    "names.ts",
     "reset-password.ts"
   ]
 }

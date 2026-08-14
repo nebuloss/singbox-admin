@@ -18,6 +18,7 @@ import crypto from 'crypto'
 import { execFile } from 'child_process'
 import QRCode from 'qrcode'
 import { readAuth, writeAuth, verifyPassword } from './auth'
+import { readNames, writeNames, type Names } from './names'
 
 const app = express()
 app.set('trust proxy', 1)
@@ -32,6 +33,8 @@ const PUBLIC_PORT = Number(process.env.PUBLIC_PORT ?? 443)
 // The password lives hashed in AUTH_FILE. ADMIN_PASSWORD is only a bootstrap
 // value: on first start it is hashed into that file and never read again.
 const AUTH_FILE = process.env.AUTH_FILE ?? path.join(__dirname, '..', 'auth.json')
+// Display names live here, never in the sing-box configuration — see names.ts.
+const NAMES_FILE = process.env.NAMES_FILE ?? path.join(__dirname, '..', 'names.json')
 let auth = readAuth(AUTH_FILE)
 if (!auth && process.env.ADMIN_PASSWORD) {
   auth = writeAuth(AUTH_FILE, process.env.ADMIN_PASSWORD)
@@ -41,7 +44,9 @@ const readOnly = () => auth === null
 
 // ── Types kept deliberately loose: we only touch the users array and leave the
 //    rest of the sing-box config untouched, whatever it contains.
-type User = { uuid: string; name?: string }
+// A UUID and nothing else: what sing-box needs to authenticate a device, and
+// all it is ever told. The readable name lives in names.json, keyed by UUID.
+type User = { uuid: string }
 type Inbound = {
   type?: string
   tag?: string
@@ -63,6 +68,7 @@ type Config = {
   inbounds?: Inbound[]
   endpoints?: Endpoint[]
   outbounds?: unknown[]
+  dns?: { servers?: unknown[]; [k: string]: unknown }
   route?: { rules?: Rule[]; final?: string; [k: string]: unknown }
 }
 
@@ -159,8 +165,8 @@ async function commit(cfg: Config): Promise<void> {
   }
 }
 
-function linkFor(user: User, wsPath: string): string {
-  const label = encodeURIComponent(user.name || user.uuid.slice(0, 8))
+function linkFor(user: User, name: string | undefined, wsPath: string): string {
+  const label = encodeURIComponent(name || user.uuid.slice(0, 8))
   const q = new URLSearchParams({
     encryption: 'none',
     security: 'tls',
@@ -228,21 +234,44 @@ function parseWireguard(text: string): { endpoint: Endpoint; allowedIps: string[
   }
 }
 
-const slug = (name: string) =>
-  name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'wg'
-
 /** Accepts either an array or the comma-separated string a form field yields. */
 const list = (v: unknown): string[] =>
   (Array.isArray(v) ? v : String(v ?? '').split(/[,\s]+/))
     .map((s) => String(s).trim())
     .filter(Boolean)
 
+/**
+ * A tunnel tag is `wg-<id>` when enabled and `wgx-<id>` when not. The id is
+ * random and permanent: it is what the display name is filed under, so
+ * renaming never touches the sing-box configuration.
+ *
+ * The prefix is the one thing that does move, when a tunnel is switched on or
+ * off — hence retag() below, which carries the references along.
+ */
 const isWgTag = (tag: string) => tag.startsWith(`${WG_ON}-`) || tag.startsWith(`${WG_OFF}-`)
 const isEnabled = (tag: string) => tag.startsWith(`${WG_ON}-`)
-const wgName = (tag: string) => tag.slice(tag.indexOf('-') + 1)
-const withState = (tag: string, on: boolean) => `${on ? WG_ON : WG_OFF}-${wgName(tag)}`
+const wgId = (tag: string) => tag.slice(tag.indexOf('-') + 1)
+const withState = (tag: string, on: boolean) => `${on ? WG_ON : WG_OFF}-${wgId(tag)}`
+const newWgId = () => crypto.randomBytes(4).toString('hex')
+
+/** How a display name is filed for a tunnel, stable across on/off. */
+const wgKey = (tag: string) => `wg:${wgId(tag)}`
 
 const wgEndpoints = (cfg: Config) => (cfg.endpoints ?? []).filter((e) => isWgTag(e.tag))
+
+/**
+ * Move every reference to a tag when that tag changes.
+ *
+ * Routing rules are rebuilt from scratch elsewhere, but a DNS server can also
+ * take a `detour`, and a detour left pointing at the old tag quietly stops
+ * resolving through the tunnel.
+ */
+function retag(cfg: Config, from: string, to: string) {
+  if (from === to) return
+  for (const server of (cfg.dns?.servers ?? []) as { detour?: string }[]) {
+    if (server.detour === from) server.detour = to
+  }
+}
 
 /**
  * The tunnel currently carrying traffic, if any — counting only a rule that
@@ -278,13 +307,13 @@ function applyRouting(cfg: Config, on: boolean) {
   cfg.route.rules.push({ ip_cidr: first.peers?.[0]?.allowed_ips ?? [], outbound: first.tag })
 }
 
-function wireguardSummary(cfg: Config) {
+function wireguardSummary(cfg: Config, names: Names) {
   const profiles = wgEndpoints(cfg).map((e) => {
     const peer = e.peers?.[0]
     // The private key is never returned.
     return {
       tag: e.tag,
-      name: wgName(e.tag),
+      name: names[wgKey(e.tag)] ?? wgId(e.tag),
       enabled: isEnabled(e.tag),
       address: e.address,
       peer: peer ? `${peer.address}:${peer.port}` : null,
@@ -386,9 +415,11 @@ app.get('/api/state', async (req, res) => {
 
     // Suspended devices keep the public link — it is what makes them work
     // again the moment they are put back.
+    const names = readNames(NAMES_FILE)
     const describe = async (u: User, enabled: boolean) => {
-      const link = linkFor(u, wsPath)
-      return { ...u, link, enabled, qr: await QRCode.toString(link, { type: 'svg', margin: 1 }) }
+      const name = names[u.uuid]
+      const link = linkFor(u, name, wsPath)
+      return { uuid: u.uuid, name, link, enabled, qr: await QRCode.toString(link, { type: 'svg', margin: 1 }) }
     }
     const users = await Promise.all([
       ...(inbound.users ?? []).map((u) => describe(u, true)),
@@ -399,24 +430,33 @@ app.get('/api/state', async (req, res) => {
       users,
       service: { running: /started|running|active/i.test(status.out), version },
       tunnel: { host: PUBLIC_HOST, port: PUBLIC_PORT, path: wsPath },
-      wireguard: wireguardSummary(cfg),
+      wireguard: wireguardSummary(cfg, names),
     })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
   }
 })
 
+// Letters of any script, so an accented or non-Latin name is not "invalid".
+const NAME_RE = /^[\p{L}\p{N} ._@()'’-]{1,40}$/u
+const taken = (names: Names, name: string, except?: string) =>
+  Object.entries(names).some(
+    ([k, v]) => k !== except && v.toLocaleLowerCase() === name.toLocaleLowerCase(),
+  )
+
 app.post('/api/users', requireAuth, async (req, res) => {
   const name = String(req.body?.name ?? '').trim()
-  if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
+  if (!NAME_RE.test(name)) return res.status(400).json({ error: 'nom invalide' })
   try {
+    const names = readNames(NAMES_FILE)
+    if (taken(names, name)) return res.status(409).json({ error: 'ce nom existe deja' })
+
+    const uuid = crypto.randomUUID()
     const cfg = readConfig()
-    // Names are checked across both lists: a suspended device still holds its
-    // name, and two devices sharing one would be unreadable in the interface.
-    if (allUsers(cfg).some((u) => u.name === name))
-      return res.status(409).json({ error: 'ce nom existe deja' })
-    liveInbound(cfg).users!.push({ uuid: crypto.randomUUID(), name })
+    // sing-box is told the UUID and nothing else; the name is ours to keep.
+    liveInbound(cfg).users!.push({ uuid })
     await commit(cfg)
+    writeNames(NAMES_FILE, { ...names, [uuid]: name })
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
@@ -438,27 +478,31 @@ app.delete('/api/users/:uuid', requireAuth, async (req, res) => {
     drop(parkedInbound(cfg))
 
     await commit(cfg)
+    const { [req.params.uuid]: _gone, ...rest } = readNames(NAMES_FILE)
+    writeNames(NAMES_FILE, rest)
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
   }
 })
 
-app.patch('/api/users/:uuid', requireAuth, async (req, res) => {
+/**
+ * Renaming writes names.json and stops there — no configuration rewrite, no
+ * `sing-box check`, no service restart, so nobody loses their connection over
+ * a label. That is the whole reason sing-box is only ever told the UUID.
+ */
+app.patch('/api/users/:uuid', requireAuth, (req, res) => {
   const name = String(req.body?.name ?? '').trim()
-  if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
+  if (!NAME_RE.test(name)) return res.status(400).json({ error: 'nom invalide' })
   try {
-    const cfg = readConfig()
-    const user = allUsers(cfg).find((u) => u.uuid === req.params.uuid)
-    if (!user) return res.status(404).json({ error: 'inconnu' })
-    if (allUsers(cfg).some((u) => u.uuid !== user.uuid && u.name === name))
+    if (!allUsers(readConfig()).some((u) => u.uuid === req.params.uuid))
+      return res.status(404).json({ error: 'inconnu' })
+
+    const names = readNames(NAMES_FILE)
+    if (taken(names, name, req.params.uuid))
       return res.status(409).json({ error: 'ce nom existe deja' })
 
-    // The whole point of the shelf: renaming touches a label and nothing else.
-    // The UUID is untouched, so a connected device is not cut off and a
-    // suspended one stays suspended.
-    user.name = name
-    await commit(cfg)
+    writeNames(NAMES_FILE, { ...names, [req.params.uuid]: name })
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
@@ -496,8 +540,9 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     const name = String(req.body?.name ?? '').trim()
     if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
 
+    const names = readNames(NAMES_FILE)
     const { endpoint } = parseWireguard(String(req.body?.config ?? ''))
-    endpoint.tag = `${WG_ON}-${slug(name)}`
+    endpoint.tag = `${WG_ON}-${newWgId()}`
 
     const cfg = readConfig()
     const existing = wgEndpoints(cfg)
@@ -506,8 +551,7 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     // same name, and the same peer pasted under a different name. The second
     // is the one that actually bites — a duplicate would sit in the list doing
     // nothing, since only the first enabled one ever serves.
-    if (existing.some((e) => wgName(e.tag) === slug(name)))
-      return res.status(409).json({ error: 'un tunnel porte deja ce nom' })
+    if (taken(names, name)) return res.status(409).json({ error: 'un tunnel porte deja ce nom' })
 
     const peer = endpoint.peers[0]
     const same = existing.find((e) => {
@@ -517,9 +561,9 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     // Shaped as "<message> : <detail>" like the other messages carrying a
     // variable part, so the interface can translate the fixed half of it.
     if (same)
-      return res
-        .status(409)
-        .json({ error: `ce tunnel est deja configure sous le nom : ${wgName(same.tag)}` })
+      return res.status(409).json({
+        error: `ce tunnel est deja configure sous le nom : ${names[wgKey(same.tag)] ?? wgId(same.tag)}`,
+      })
 
     cfg.endpoints = [...(cfg.endpoints ?? []), endpoint]
 
@@ -527,6 +571,7 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     applyRouting(cfg, activeTarget(cfg) !== null)
 
     await commit(cfg)
+    writeNames(NAMES_FILE, { ...names, [wgKey(endpoint.tag)]: name })
     res.json({ ok: true, tag: endpoint.tag })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -542,7 +587,7 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
 app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
   try {
     const name = String(req.body?.name ?? '').trim()
-    if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
+    if (!NAME_RE.test(name)) return res.status(400).json({ error: 'nom invalide' })
 
     const host = String(req.body?.host ?? '').trim()
     const port = Number(req.body?.port)
@@ -560,28 +605,28 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
     const ep = wgEndpoints(cfg).find((e) => e.tag === req.params.tag)
     if (!ep) return res.status(404).json({ error: 'tunnel introuvable' })
 
-    const others = wgEndpoints(cfg).filter((e) => e !== ep)
-    if (others.some((e) => wgName(e.tag) === slug(name)))
+    const names = readNames(NAMES_FILE)
+    if (taken(names, name, wgKey(ep.tag)))
       return res.status(409).json({ error: 'un tunnel porte deja ce nom' })
 
-    const clash = others.find((e) => {
-      const p = e.peers?.[0]
-      return p && p.public_key === publicKey && p.address === host && p.port === port
-    })
+    const clash = wgEndpoints(cfg)
+      .filter((e) => e !== ep)
+      .find((e) => {
+        const p = e.peers?.[0]
+        return p && p.public_key === publicKey && p.address === host && p.port === port
+      })
     if (clash)
-      return res
-        .status(409)
-        .json({ error: `ce tunnel est deja configure sous le nom : ${wgName(clash.tag)}` })
+      return res.status(409).json({
+        error: `ce tunnel est deja configure sous le nom : ${names[wgKey(clash.tag)] ?? wgId(clash.tag)}`,
+      })
 
     const keepalive = Number(req.body?.keepalive)
     const peer = ep.peers?.[0]
     if (!peer) return res.status(400).json({ error: 'tunnel sans pair' })
 
-    // Read the outbound state before touching the tag: once it changes, the
-    // existing rule points at a tag nobody defines and reads as switched off.
-    const wasOn = activeTarget(cfg) !== null
-
-    ep.tag = withState(`${WG_ON}-${slug(name)}`, isEnabled(ep.tag))
+    // The tag holds a permanent id, so nothing here renames it. Only the peer
+    // fields can change, and only those are worth a write.
+    const before = JSON.stringify([ep.address, peer])
     ep.address = address
     peer.address = host
     peer.port = port
@@ -589,11 +634,12 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
     peer.allowed_ips = allowedIps
     peer.persistent_keepalive_interval = Number.isInteger(keepalive) && keepalive > 0 ? keepalive : 25
 
-    // The tag may just have changed, and routing rules point at tags — so they
-    // are rebuilt from the list rather than patched.
-    applyRouting(cfg, wasOn)
-
-    await commit(cfg)
+    if (JSON.stringify([ep.address, peer]) !== before) {
+      // AllowedIPs feeds the routing rule, so rebuild it, keeping the mode.
+      applyRouting(cfg, activeTarget(cfg) !== null)
+      await commit(cfg)
+    }
+    writeNames(NAMES_FILE, { ...names, [wgKey(ep.tag)]: name })
     res.json({ ok: true, tag: ep.tag })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -639,7 +685,11 @@ app.post('/api/wireguard/:tag/enabled', requireAuth, async (req, res) => {
     if (!ep) return res.status(404).json({ error: 'tunnel introuvable' })
 
     const wasOn = activeTarget(cfg) !== null
+    const before = ep.tag
     ep.tag = withState(ep.tag, Boolean(req.body?.enabled))
+    // Only the prefix moved, but a DNS detour naming the old tag would stop
+    // resolving through the tunnel. The id — and so the name — is untouched.
+    retag(cfg, before, ep.tag)
     applyRouting(cfg, wasOn)
     await commit(cfg)
     res.json({ ok: true, tag: ep.tag })
@@ -661,6 +711,8 @@ app.delete('/api/wireguard/:tag', requireAuth, async (req, res) => {
     // endpoint is rejected by sing-box outright.
     applyRouting(cfg, wasOn)
     await commit(cfg)
+    const { [wgKey(tag)]: _gone, ...rest } = readNames(NAMES_FILE)
+    writeNames(NAMES_FILE, rest)
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })

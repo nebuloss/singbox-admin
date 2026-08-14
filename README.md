@@ -5,9 +5,13 @@ VLESS tunnel: hand out connection links and QR codes, suspend or revoke a
 device, and pick which WireGuard tunnel the traffic leaves through.
 
 It is deliberately narrow. There is no database, no user model, no traffic
-accounting — sing-box's own configuration file is the single source of truth,
-and the app only touches the parts it owns: the `users` array of one inbound,
-the WireGuard endpoints, and the routing rules that reference them.
+accounting. sing-box's own configuration file holds everything that decides
+who gets in and where traffic goes, and the app only touches the parts it
+owns: the `users` array of one inbound, the WireGuard endpoints, and the
+routing rules that reference them.
+
+The one thing kept outside it is display names, in a `names.json` beside the
+app — see [Where the state lives](#where-the-state-lives) for why.
 
 ## What it manages
 
@@ -57,29 +61,33 @@ library.
 
 ### Where the state lives
 
-sing-box rejects unknown keys, so nothing here can carry an `"enabled": false`
-field of our own. Every state is expressed with what the format already offers:
+**sing-box is only ever told identifiers.** A device is a UUID and nothing
+else; a tunnel is a tag `wg-<id>` carrying a random, permanent id. Neither has
+to be readable, so neither ever has to change.
+
+The readable name lives in `names.json`, filed under that identifier. Renaming
+therefore writes that one small file: the sing-box configuration is not
+rewritten, not revalidated and not restarted, and nobody loses a connection
+over a label. Losing `names.json` costs labels and nothing else — every device
+and tunnel keeps working.
+
+Everything that decides access or routing stays in the sing-box configuration,
+expressed with what the format already offers, since it rejects unknown keys:
 
 - **a suspended device is moved, not flagged.** It goes to a second VLESS
   inbound, tagged `vless-suspended` and bound to `127.0.0.1`, which no reverse
   proxy forwards and nothing off the host can reach. The shelf is created when
   the first device lands on it and removed when the last one leaves.
-- a disabled tunnel carries a `wgx-` tag instead of `wg-`
+- a disabled tunnel carries a `wgx-` prefix instead of `wg-`, keeping its id
 - the tunnel in use is whichever one a routing rule points at; no such rule
   means traffic leaves directly
 
-Moving rather than flagging is what keeps the **UUID the identity**. The
-alternative is a routing rule matching the device by name — which works, but
-makes the name load-bearing: every rename then has to drag the rule along, and
-a config edited by hand desynchronises silently. Here a name is only ever a
-label, and renaming touches nothing else.
-
-(If you do write such a rule yourself, the matcher is `auth_user`. There is
-also a `user` field — it passes `sing-box check`, but matches the OS process
-owner, so the rule quietly matches nothing.)
-
-Nothing is stored anywhere else. Edit the file by hand, reload the page, and it
-shows what you wrote.
+The alternative to all this is a routing rule matching a device by name, which
+does work — but it makes the name load-bearing: every rename has to drag the
+rule along, a hand-edited config desynchronises in silence, and a cosmetic
+change restarts the service. (If you write such a rule yourself, the matcher
+is `auth_user`. There is also a `user` field — it passes `sing-box check`, but
+matches the OS process owner, so the rule quietly matches nothing.)
 
 ## Requirements
 
@@ -218,6 +226,7 @@ Pushing a `v*` tag builds and publishes a release through GitHub Actions.
 | `SINGBOX_SERVICE` | `sing-box` | service name to restart |
 | `APP_PORT` | `3000` | port the interface listens on |
 | `APP_DIR` | `/opt/singbox-admin` | install directory |
+| `NAMES_FILE` | `$APP_DIR/names.json` | display names, keyed by device UUID and tunnel id |
 
 The password can also be changed from the interface.
 
@@ -239,7 +248,7 @@ new one is never printed to a terminal or pasted through a chat log. Pass a
 password as an argument to set it directly instead.
 
 Existing clients are untouched: resetting the interface password does not
-revoke a single device.
+revoke a single device, and `names.json` is left alone.
 
 ## Security model
 
