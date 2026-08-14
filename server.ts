@@ -91,6 +91,11 @@ function vlessInbound(cfg: Config): Inbound {
  * the tunnel down.
  */
 async function commit(cfg: Config): Promise<void> {
+  // Every write leaves the file self-consistent, whatever the caller did:
+  // rejections naming a device that is gone are dropped rather than carried
+  // forward. Reads already ignore them, so this only keeps the file honest.
+  applyUserRules(cfg, disabledUsers(cfg))
+
   const backup = fs.readFileSync(CONFIG_PATH, 'utf8')
   const tmp = path.join(os.tmpdir(), `singbox-admin-${process.pid}.json`)
   fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2))
