@@ -120,6 +120,14 @@ install_deps() {
   rm -f "$log"
 }
 
+# The app config also holds device names, so it can exist with no password in
+# it — after a reset. Ask what is actually in it rather than whether it exists.
+has_password() {
+  [ -f "$APP_DIR/config.json" ] || return 1
+  "$NODE_BIN" -e 'const s = require(process.argv[1]); process.exit(s.password && s.password.hash ? 0 : 1)' \
+    "$APP_DIR/config.json" 2>/dev/null
+}
+
 set_password() {
   # Hashed here, and only the hash is stored. The password is never written in
   # clear text, and never handed to the service as an environment variable,
@@ -127,15 +135,15 @@ set_password() {
   if [ -n "$ADMIN_PASSWORD" ]; then
     "$NODE_BIN" "$APP_DIR/dist-server/reset-password.js" "$ADMIN_PASSWORD" >/dev/null \
       || error "ecriture du mot de passe impossible"
-    info "Mot de passe hache dans $APP_DIR/auth.json"
-  elif [ -f "$APP_DIR/auth.json" ]; then
+    info "Mot de passe hache dans $APP_DIR/config.json"
+  elif has_password; then
     info "Mot de passe existant conserve"
   fi
 
-  # Judge the outcome, not the branch taken above: reaching this point without
-  # a hash file means the interface comes up unclaimed, and whoever loads it
-  # first gets to choose the password.
-  if [ ! -f "$APP_DIR/auth.json" ]; then
+  # Judge the outcome, not the branch taken above: reaching this point with no
+  # password means the interface comes up unclaimed, and whoever loads it first
+  # gets to choose one.
+  if ! has_password; then
     warn "AUCUN MOT DE PASSE DEFINI"
     warn "L'interface demarre en mode premiere configuration : le premier"
     warn "visiteur choisira le mot de passe. A faire tout de suite, ou definir"

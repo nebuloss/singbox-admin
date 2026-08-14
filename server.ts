@@ -17,8 +17,13 @@ import os from 'os'
 import crypto from 'crypto'
 import { execFile } from 'child_process'
 import QRCode from 'qrcode'
-import { readAuth, writeAuth, verifyPassword } from './auth'
-import { readNames, writeNames, type Names } from './names'
+import {
+  readAdminConfig,
+  updateAdminConfig,
+  hashPassword,
+  verifyPassword,
+  type Names,
+} from './admin-config'
 
 const app = express()
 app.set('trust proxy', 1)
@@ -30,22 +35,23 @@ const CONFIG_PATH = process.env.SINGBOX_CONFIG ?? '/etc/sing-box/config.json'
 const SERVICE = process.env.SINGBOX_SERVICE ?? 'sing-box'
 const PUBLIC_HOST = process.env.PUBLIC_HOST ?? 'example.com'
 const PUBLIC_PORT = Number(process.env.PUBLIC_PORT ?? 443)
-// The password lives hashed in AUTH_FILE. ADMIN_PASSWORD is only a bootstrap
-// value: on first start it is hashed into that file and never read again.
-const AUTH_FILE = process.env.AUTH_FILE ?? path.join(__dirname, '..', 'auth.json')
-// Display names live here, never in the sing-box configuration — see names.ts.
-const NAMES_FILE = process.env.NAMES_FILE ?? path.join(__dirname, '..', 'names.json')
-let auth = readAuth(AUTH_FILE)
-if (!auth && process.env.ADMIN_PASSWORD) {
-  auth = writeAuth(AUTH_FILE, process.env.ADMIN_PASSWORD)
-  console.log(`mot de passe initial hache dans ${AUTH_FILE}`)
+// The app's own config: the password hash and the display names. Named apart
+// from SINGBOX_CONFIG on purpose — both files are called config.json, and the
+// two must never be confused for one another. ADMIN_PASSWORD is a bootstrap
+// value only: on first start it is hashed into this file and never read again.
+const ADMIN_CONFIG = process.env.ADMIN_CONFIG ?? path.join(__dirname, '..', 'config.json')
+if (!readAdminConfig(ADMIN_CONFIG).password && process.env.ADMIN_PASSWORD) {
+  const password = hashPassword(process.env.ADMIN_PASSWORD)
+  updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, password }))
+  console.log(`mot de passe initial hache dans ${ADMIN_CONFIG}`)
 }
-const readOnly = () => auth === null
+const credential = () => readAdminConfig(ADMIN_CONFIG).password
+const readOnly = () => credential() === null
 
 // ── Types kept deliberately loose: we only touch the users array and leave the
 //    rest of the sing-box config untouched, whatever it contains.
 // A UUID and nothing else: what sing-box needs to authenticate a device, and
-// all it is ever told. The readable name lives in names.json, keyed by UUID.
+// all it is ever told. The readable name lives in our own config.json, keyed by UUID.
 type User = { uuid: string }
 type Inbound = {
   type?: string
@@ -349,12 +355,12 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
  * host rather than being exposed here.
  */
 app.post('/api/setup', (req, res) => {
-  if (auth) return res.status(409).json({ error: 'un mot de passe est deja defini' })
-  const password = String(req.body?.password ?? '')
-  if (password.length < 10) return res.status(400).json({ error: '10 caracteres minimum' })
+  if (credential()) return res.status(409).json({ error: 'un mot de passe est deja defini' })
+  const chosen = String(req.body?.password ?? '')
+  if (chosen.length < 10) return res.status(400).json({ error: '10 caracteres minimum' })
 
   try {
-    auth = writeAuth(AUTH_FILE, password)
+    updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, password: hashPassword(chosen) }))
   } catch (e) {
     return res.status(500).json({ error: `ecriture impossible : ${(e as Error).message}` })
   }
@@ -366,8 +372,9 @@ app.post('/api/setup', (req, res) => {
 })
 
 app.post('/api/login', (req, res) => {
-  if (!auth) return res.status(409).json({ error: 'aucun mot de passe defini' })
-  if (!verifyPassword(String(req.body?.password ?? ''), auth.hash))
+  const current = credential()
+  if (!current) return res.status(409).json({ error: 'aucun mot de passe defini' })
+  if (!verifyPassword(String(req.body?.password ?? ''), current.hash))
     return res.status(401).json({ error: 'mot de passe incorrect' })
 
   const token = crypto.randomBytes(32).toString('hex')
@@ -379,13 +386,14 @@ app.post('/api/login', (req, res) => {
 app.post('/api/password', requireAuth, (req, res) => {
   const current = String(req.body?.current ?? '')
   const next = String(req.body?.next ?? '')
-  if (!auth || !verifyPassword(current, auth.hash))
+  const stored = credential()
+  if (!stored || !verifyPassword(current, stored.hash))
     return res.status(401).json({ error: 'mot de passe actuel incorrect' })
   if (next.length < 10) return res.status(400).json({ error: '10 caracteres minimum' })
   if (next === current) return res.status(400).json({ error: 'identique a l actuel' })
 
   try {
-    auth = writeAuth(AUTH_FILE, next)
+    updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, password: hashPassword(next) }))
   } catch (e) {
     return res.status(500).json({ error: `ecriture impossible : ${(e as Error).message}` })
   }
@@ -405,7 +413,7 @@ app.post('/api/logout', (req, res) => {
 })
 
 app.get('/api/state', async (req, res) => {
-  if (!authed(req)) return res.json({ authed: false, setup: auth === null })
+  if (!authed(req)) return res.json({ authed: false, setup: credential() === null })
   try {
     const cfg = readConfig()
     const inbound = liveInbound(cfg)
@@ -415,7 +423,7 @@ app.get('/api/state', async (req, res) => {
 
     // Suspended devices keep the public link — it is what makes them work
     // again the moment they are put back.
-    const names = readNames(NAMES_FILE)
+    const names = readAdminConfig(ADMIN_CONFIG).names
     const describe = async (u: User, enabled: boolean) => {
       const name = names[u.uuid]
       const link = linkFor(u, name, wsPath)
@@ -448,7 +456,7 @@ app.post('/api/users', requireAuth, async (req, res) => {
   const name = String(req.body?.name ?? '').trim()
   if (!NAME_RE.test(name)) return res.status(400).json({ error: 'nom invalide' })
   try {
-    const names = readNames(NAMES_FILE)
+    const names = readAdminConfig(ADMIN_CONFIG).names
     if (taken(names, name)) return res.status(409).json({ error: 'ce nom existe deja' })
 
     const uuid = crypto.randomUUID()
@@ -456,7 +464,7 @@ app.post('/api/users', requireAuth, async (req, res) => {
     // sing-box is told the UUID and nothing else; the name is ours to keep.
     liveInbound(cfg).users!.push({ uuid })
     await commit(cfg)
-    writeNames(NAMES_FILE, { ...names, [uuid]: name })
+    updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [uuid]: name } }))
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
@@ -478,8 +486,10 @@ app.delete('/api/users/:uuid', requireAuth, async (req, res) => {
     drop(parkedInbound(cfg))
 
     await commit(cfg)
-    const { [req.params.uuid]: _gone, ...rest } = readNames(NAMES_FILE)
-    writeNames(NAMES_FILE, rest)
+    updateAdminConfig(ADMIN_CONFIG, (s) => {
+      const { [req.params.uuid]: _gone, ...rest } = s.names
+      return { ...s, names: rest }
+    })
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
@@ -498,11 +508,11 @@ app.patch('/api/users/:uuid', requireAuth, (req, res) => {
     if (!allUsers(readConfig()).some((u) => u.uuid === req.params.uuid))
       return res.status(404).json({ error: 'inconnu' })
 
-    const names = readNames(NAMES_FILE)
+    const names = readAdminConfig(ADMIN_CONFIG).names
     if (taken(names, name, req.params.uuid))
       return res.status(409).json({ error: 'ce nom existe deja' })
 
-    writeNames(NAMES_FILE, { ...names, [req.params.uuid]: name })
+    updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [req.params.uuid]: name } }))
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
@@ -540,7 +550,7 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     const name = String(req.body?.name ?? '').trim()
     if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
 
-    const names = readNames(NAMES_FILE)
+    const names = readAdminConfig(ADMIN_CONFIG).names
     const { endpoint } = parseWireguard(String(req.body?.config ?? ''))
     endpoint.tag = `${WG_ON}-${newWgId()}`
 
@@ -571,7 +581,7 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     applyRouting(cfg, activeTarget(cfg) !== null)
 
     await commit(cfg)
-    writeNames(NAMES_FILE, { ...names, [wgKey(endpoint.tag)]: name })
+    updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [wgKey(endpoint.tag)]: name } }))
     res.json({ ok: true, tag: endpoint.tag })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -605,7 +615,7 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
     const ep = wgEndpoints(cfg).find((e) => e.tag === req.params.tag)
     if (!ep) return res.status(404).json({ error: 'tunnel introuvable' })
 
-    const names = readNames(NAMES_FILE)
+    const names = readAdminConfig(ADMIN_CONFIG).names
     if (taken(names, name, wgKey(ep.tag)))
       return res.status(409).json({ error: 'un tunnel porte deja ce nom' })
 
@@ -639,7 +649,7 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
       applyRouting(cfg, activeTarget(cfg) !== null)
       await commit(cfg)
     }
-    writeNames(NAMES_FILE, { ...names, [wgKey(ep.tag)]: name })
+    updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [wgKey(ep.tag)]: name } }))
     res.json({ ok: true, tag: ep.tag })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -711,8 +721,10 @@ app.delete('/api/wireguard/:tag', requireAuth, async (req, res) => {
     // endpoint is rejected by sing-box outright.
     applyRouting(cfg, wasOn)
     await commit(cfg)
-    const { [wgKey(tag)]: _gone, ...rest } = readNames(NAMES_FILE)
-    writeNames(NAMES_FILE, rest)
+    updateAdminConfig(ADMIN_CONFIG, (s) => {
+      const { [wgKey(tag)]: _gone, ...rest } = s.names
+      return { ...s, names: rest }
+    })
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })

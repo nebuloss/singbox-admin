@@ -15,8 +15,7 @@
   },
   "include": [
     "server.ts",
-    "auth.ts",
-    "names.ts",
+    "admin-config.ts",
     "reset-password.ts"
   ]
 }

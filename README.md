@@ -10,8 +10,9 @@ who gets in and where traffic goes, and the app only touches the parts it
 owns: the `users` array of one inbound, the WireGuard endpoints, and the
 routing rules that reference them.
 
-The one thing kept outside it is display names, in a `names.json` beside the
-app — see [Where the state lives](#where-the-state-lives) for why.
+The one thing kept outside it is display names, in the app's own `config.json`
+alongside the password hash — see [Where the state lives](#where-the-state-lives)
+for why.
 
 ## What it manages
 
@@ -65,11 +66,13 @@ library.
 else; a tunnel is a tag `wg-<id>` carrying a random, permanent id. Neither has
 to be readable, so neither ever has to change.
 
-The readable name lives in `names.json`, filed under that identifier. Renaming
-therefore writes that one small file: the sing-box configuration is not
-rewritten, not revalidated and not restarted, and nobody loses a connection
-over a label. Losing `names.json` costs labels and nothing else — every device
-and tunnel keeps working.
+The readable name lives in the app's own `config.json` — a small file next
+to the install, the same
+one holding the password hash — filed under that identifier. Renaming therefore
+writes that file and stops there: the sing-box configuration is not rewritten,
+not revalidated and not restarted, and nobody loses a connection over a label.
+Losing it costs the password and the labels; every device and tunnel
+keeps working.
 
 Everything that decides access or routing stays in the sing-box configuration,
 expressed with what the format already offers, since it rejects unknown keys:
@@ -226,7 +229,7 @@ Pushing a `v*` tag builds and publishes a release through GitHub Actions.
 | `SINGBOX_SERVICE` | `sing-box` | service name to restart |
 | `APP_PORT` | `3000` | port the interface listens on |
 | `APP_DIR` | `/opt/singbox-admin` | install directory |
-| `NAMES_FILE` | `$APP_DIR/names.json` | display names, keyed by device UUID and tunnel id |
+| `ADMIN_CONFIG` | `$APP_DIR/config.json` | the app's own file: password hash and display names |
 
 The password can also be changed from the interface.
 
@@ -248,7 +251,7 @@ new one is never printed to a terminal or pasted through a chat log. Pass a
 password as an argument to set it directly instead.
 
 Existing clients are untouched: resetting the interface password does not
-revoke a single device, and `names.json` is left alone.
+revoke a single device, and the names stored beside it are left alone.
 
 ## Security model
 
@@ -260,7 +263,7 @@ proxy that terminates TLS — not to face the internet.
 - The session cookie is `httpOnly`, `sameSite=strict` and `secure`, so the app
   requires HTTPS in front of it
 - Changing the password drops every other session
-- The password is stored only as a scrypt hash, in `auth.json` (mode 600).
+- The password is stored only as a scrypt hash, in the app's own `config.json` (mode 600).
   `ADMIN_PASSWORD` is a bootstrap value: it is hashed at install and never
   written to disk in clear text, nor passed to the service as an environment
   variable where `systemctl show` or `/proc/<pid>/environ` would expose it
