@@ -6,8 +6,11 @@
 # host's service.
 #
 # Usage (as root on the appliance):
-#   ADMIN_PASSWORD=... sh install.sh              # from a local build tarball
-#   ADMIN_PASSWORD=... TARBALL=/tmp/x.tar.gz sh install.sh
+#   curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/install.sh \
+#     | ADMIN_PASSWORD=... PUBLIC_HOST=tunnel.example.com sh
+#
+# Override defaults via env: APP_DIR, APP_PORT, GH_REPO, TARBALL (to install a
+# locally built archive instead of the latest release).
 #
 # Supported systems: Alpine Linux (OpenRC), Debian/Ubuntu (systemd)
 
@@ -17,6 +20,7 @@ APP_DIR="${APP_DIR:-/opt/singbox-admin}"
 APP_PORT="${APP_PORT:-3000}"
 NODE_VERSION="${NODE_VERSION:-22}"
 SERVICE_NAME="singbox-admin"
+GH_REPO="${GH_REPO:-nebuloss/singbox-admin}"
 TARBALL="${TARBALL:-}"
 SINGBOX_CONFIG="${SINGBOX_CONFIG:-/etc/sing-box/config.json}"
 SINGBOX_SERVICE="${SINGBOX_SERVICE:-sing-box}"
@@ -61,9 +65,6 @@ else
 fi
 
 # ── Deploy the build ──────────────────────────────────────────────────────────
-[ -n "$TARBALL" ] || error "TARBALL non fourni (chemin de l'archive de build)"
-[ -f "$TARBALL" ] || error "archive introuvable : $TARBALL"
-
 if [ -d "$APP_DIR/dist-server" ]; then
   info "Installation existante — mise a jour"
   rc-service "$SERVICE_NAME" stop 2>/dev/null || systemctl stop "$SERVICE_NAME" 2>/dev/null || true
@@ -73,7 +74,19 @@ fi
 
 rm -rf "$APP_DIR/dist" "$APP_DIR/dist-server"
 mkdir -p "$APP_DIR"
-tar -xzf "$TARBALL" -C "$APP_DIR"
+
+if [ -n "$TARBALL" ]; then
+  [ -f "$TARBALL" ] || error "archive introuvable : $TARBALL"
+  info "Installation depuis l'archive locale $TARBALL"
+  tar -xzf "$TARBALL" -C "$APP_DIR"
+else
+  APP_VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/releases/latest" \
+    | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+  [ -n "${APP_VERSION:-}" ] || error "aucune release publiee sur ${GH_REPO} — fournir TARBALL"
+  info "Telechargement de la version ${APP_VERSION}…"
+  curl -fsSL "https://github.com/${GH_REPO}/releases/latest/download/singbox-admin.tar.gz" \
+    | tar -xz -C "$APP_DIR"
+fi
 
 info "Dependances de production…"
 cd "$APP_DIR"

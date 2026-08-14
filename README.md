@@ -44,7 +44,34 @@ library.
 The app must run **on the sing-box host**: it edits that host's configuration
 file and restarts that host's service.
 
-## Build
+## Install
+
+Both scripts are idempotent: the same command installs and updates.
+
+### 1. sing-box, if you do not have it yet
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/scripts/install-singbox.sh | sh
+```
+
+Installs sing-box and writes a VLESS + WebSocket inbound with a generated UUID
+and a random secret path. It leaves an existing configuration untouched.
+
+TLS is not handled here on purpose: the inbound speaks plain WebSocket and
+expects a reverse proxy in front of it to terminate HTTPS on 443 and forward
+the secret path, so certificate renewal stays where it already works.
+
+### 2. The admin interface
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/install.sh \
+  | ADMIN_PASSWORD='choose-something-long' PUBLIC_HOST=tunnel.example.com sh
+```
+
+It pulls the latest release. `ADMIN_PASSWORD` is only written when supplied,
+so an update keeps the password already in use.
+
+## Build from source
 
 ```sh
 npm install
@@ -52,19 +79,13 @@ npm run build          # -> dist/ (SPA) and dist-server/ (server)
 tar czf singbox-admin.tar.gz dist dist-server package.json package-lock.json
 ```
 
-## Install
-
-Copy the tarball and `install.sh` to the sing-box host, then, as root:
+Then install that archive instead of a release:
 
 ```sh
-ADMIN_PASSWORD='choose-something-long' \
-PUBLIC_HOST=tunnel.example.com \
-TARBALL=/tmp/singbox-admin.tar.gz \
-sh install.sh
+TARBALL=/tmp/singbox-admin.tar.gz sh install.sh
 ```
 
-Re-running the same command updates an existing installation. `ADMIN_PASSWORD`
-is only written when supplied, so an update keeps the password already in use.
+Pushing a `v*` tag builds and publishes a release through GitHub Actions.
 
 ## Configuration
 
