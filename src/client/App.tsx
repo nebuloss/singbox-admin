@@ -368,8 +368,13 @@ function UserCard({
       }`}
     >
       <div className="flex flex-col gap-5 p-5 sm:flex-row">
-        <div className="mx-auto size-32 shrink-0 rounded-[var(--radius-md3-m)] bg-white p-2 sm:mx-0 [&>div>svg]:size-full">
-          <div dangerouslySetInnerHTML={{ __html: user.qr }} />
+        <div className="mx-auto flex shrink-0 flex-col items-center gap-1.5 sm:mx-0">
+          <div className="size-32 rounded-[var(--radius-md3-m)] bg-white p-2 [&>div>svg]:size-full">
+            <div dangerouslySetInnerHTML={{ __html: user.qr }} />
+          </div>
+          <p className="max-w-32 text-center text-[11px] leading-tight text-on-surface-variant">
+            {t('Scannez : le profil s’installe et se met à jour tout seul.')}
+          </p>
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="flex items-start justify-between gap-3">

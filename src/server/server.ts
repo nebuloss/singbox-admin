@@ -666,9 +666,19 @@ app.get('/api/state', async (req, res) => {
       const name = names[u.uuid]
       const link = linkFor(u, name, wsPath, base)
       const sub = `${base.origin}/${u.uuid}`
-      // The QR carries the subscription rather than the bare link: same device,
-      // but it arrives configured, DNS included.
-      return { uuid: u.uuid, name, link, sub, enabled, qr: await QRCode.toString(sub, { type: 'svg', margin: 1 }) }
+      // What the QR carries. Both Hiddify and the official sing-box client
+      // register this scheme and read url and name out of it, so a scan
+      // installs the profile instead of dropping the operator into a form.
+      const label = name || u.uuid.slice(0, 8)
+      const imp = `sing-box://import-remote-profile?url=${encodeURIComponent(sub)}#${encodeURIComponent(label)}`
+      return {
+        uuid: u.uuid,
+        name,
+        link,
+        sub,
+        enabled,
+        qr: await QRCode.toString(imp, { type: 'svg', margin: 1 }),
+      }
     }
     const users = await Promise.all([
       ...(inbound.users ?? []).map((u) => describe(u, true)),

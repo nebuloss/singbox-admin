@@ -51,6 +51,8 @@ const EN: Record<string, string> = {
     'The link stays valid: switching the device back on is all it takes.',
   'Copier le lien': 'Copy the link',
   'Copier l’abonnement': 'Copy the subscription',
+  'Scannez : le profil s’installe et se met à jour tout seul.':
+    'Scan it: the profile installs itself and keeps itself up to date.',
   'Abonnement — importez ceci, le DNS est compris':
     'Subscription — import this one, DNS included',
   'Une seule règle : un chemin en forme d’identifiant est un appareil qui demande son profil, tout le reste appartient au tunnel. Le proxy ne connaît qu’une forme, jamais le chemin du tunnel — c’est ce qui permet de régénérer celui-ci sans rien changer ici.':
