@@ -215,11 +215,14 @@ function linkFor(user: User, name: string | undefined, wsPath: string, base: Pub
 /**
  * A full client profile, served at a URL the device can subscribe to.
  *
- * The share link cannot carry DNS — the vless:// format has no field for it —
- * so a device imported from a link resolves names however it likes, which is
- * why internal names failed on the phone. A profile can carry it: the resolver
- * here is the tunnel's own, reached through the proxy, so an internal name
- * gets its internal answer wherever the device happens to be.
+ * What a vless:// link cannot say: which networks belong behind the tunnel, and
+ * that everything should go through it. Both are here.
+ *
+ * Internal names then resolve without the device knowing anything about it —
+ * the client hands the name to the tunnel and this host looks it up with the
+ * tunnel's own resolver. That only holds while the client forwards names
+ * rather than resolving them itself; a client in TUN mode may do the latter,
+ * and then its own resolver has to be pointed at the tunnel's.
  */
 function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase) {
   const serving = wgEndpoints(cfg).find((e) => isEnabled(e.tag))
