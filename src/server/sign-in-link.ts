@@ -2,8 +2,9 @@
  * Mint a sign-in link from the host, for when there is no session to make one
  * from — a forgotten password on a phone, a browser that lost its cookie.
  *
- *   node dist-server/sign-in-link.js                     # prints the token
- *   node dist-server/sign-in-link.js https://admin.lan   # prints the full link
+ *   node dist-server/sign-in-link.js                          # prints the fragment
+ *   node dist-server/sign-in-link.js https://admin.lan        # the whole link
+ *   node dist-server/sign-in-link.js https://admin.lan wireguard   # and a page
  *
  * It grants what the password grants, for a few minutes and a single use. That
  * is the same trust as running this at all: it needs the file the password
@@ -19,7 +20,11 @@ const MINUTES = Number(process.env.LINK_MINUTES ?? 10)
 try {
   const token = mintLink(ADMIN_CONFIG, MINUTES * 60_000)
   const base = (process.argv[2] ?? '').replace(/\/+$/, '')
-  console.log(base ? `${base}/#login=${token}` : `#login=${token}`)
+  // Section and token share the fragment, so the link can name a page without
+  // the token ever leaving the browser.
+  const section = (process.argv[3] ?? 'appareils').replace(/[^a-z]/g, '') || 'appareils'
+  const fragment = `#${section}&login=${token}`
+  console.log(base ? `${base}/${fragment}` : fragment)
   if (!base) console.log("Ajoutez l'adresse de l'interface devant, ou passez-la en argument.")
   console.log(`Valable ${MINUTES} minutes, une seule fois.`)
 } catch (e) {

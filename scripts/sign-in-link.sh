@@ -6,8 +6,11 @@
 # single use, which is why it is made here: needing root on this machine is the
 # point.
 #
-#   sh sign-in-link.sh                          # prints the fragment
-#   sh sign-in-link.sh https://admin.example.com  # prints the whole link
+#   sh sign-in-link.sh                                     # the fragment
+#   sh sign-in-link.sh https://admin.example.com           # the whole link
+#   sh sign-in-link.sh https://admin.example.com wireguard # and a page to land on
+#
+# Pages: appareils, wireguard, applications, parametres.
 #
 # Override APP_DIR if the app is not in /opt/singbox-admin, LINK_MINUTES for
 # how long it lives.

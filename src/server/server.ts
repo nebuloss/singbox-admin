@@ -755,7 +755,12 @@ app.post('/api/session/link', requireAuth, async (req, res) => {
   const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0] || req.protocol
   // Built from the address this interface was reached on, not the tunnel's:
   // the administration lives on the internal name and stays there.
-  const url = `${proto}://${req.get('host')}/#login=${token}`
+  //
+  // Section and token share the fragment, which a browser never sends to a
+  // server: the link can point at a page without the token ever reaching an
+  // access log, which a query string could not promise.
+  const section = String(req.body?.section ?? '').replace(/[^a-z]/g, '') || 'appareils'
+  const url = `${proto}://${req.get('host')}/#${section}&login=${token}`
   res.json({ url, minutes: Math.round(LINK_TTL / 60_000), qr: await QRCode.toString(url, { type: 'svg', margin: 1 }) })
 })
 

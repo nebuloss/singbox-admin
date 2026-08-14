@@ -95,14 +95,18 @@ export default function App() {
   useEffect(() => {
     // A sign-in link lands here as a fragment. Spend it, wipe it from the
     // address bar before anything can copy it down, then carry on as usual.
-    const token = /(?:^|[#&])login=([0-9a-fA-F-]{36})/.exec(window.location.hash)?.[1]
+    const hash = window.location.hash.replace(/^#/, '')
+    const token = /(?:^|&)login=([0-9a-fA-F-]{36})/.exec(hash)?.[1]
     if (!token) {
       void refresh()
       return
     }
-    // Leave a real page in the address bar, not a bare URL: the token goes,
-    // and what replaces it is somewhere the interface can actually be.
-    history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${TABS[0]}`)
+    // The section travels alongside the token, so a link can land wherever it
+    // was meant to. What stays in the address bar is that section alone.
+    const section = (TABS as readonly string[]).includes(hash.split('&')[0])
+      ? hash.split('&')[0]
+      : TABS[0]
+    history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${section}`)
     void api('/api/session/claim', { method: 'POST', body: JSON.stringify({ token }) })
       .catch((e) => setError((e as Error).message))
       .finally(() => void refresh())

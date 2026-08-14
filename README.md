@@ -289,17 +289,20 @@ Settings — it is remembered per browser.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/scripts/sign-in-link.sh \
-  | sh -s https://admin.example.com
+  | sh -s https://admin.example.com wireguard
 ```
 
-Prints a link that signs in once, within a few minutes. Settings makes the same
-thing as a QR code when you already have a session — scanning it beats typing a
-long password on a phone, which is where this interface is opened most.
+Prints a link that signs in once, within a few minutes, and lands on a page —
+`appareils`, `wireguard`, `applications` or `parametres`, the first by default.
+Settings makes the same thing as a QR code when you already have a session:
+scanning it beats typing a long password on a phone, which is where this
+interface is opened most.
 
-The token travels in the URL fragment, which a browser never sends to a server,
-so it cannot land in an access log or a Referer header the way a query string
-would. It is worth what the password is worth while it lives, so it does not
-live long and is spent on sight — a link that failed is a link that is gone.
+Both ride in the URL fragment, `#wireguard&login=…`, which a browser never
+sends to a server — so the token cannot land in an access log or a Referer
+header the way a query string would, and the page it names costs nothing extra.
+It is worth what the password is worth while it lives, so it does not live long
+and is spent on sight: a link that failed is a link that is gone.
 
 ## Lost password
 

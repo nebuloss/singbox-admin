@@ -18,7 +18,9 @@ export function useEscapeKey(handler: () => void, enabled = true) {
  */
 export function useHashTab<T extends string>(tabs: readonly T[], fallback: T) {
   const read = useCallback((): T => {
-    const h = window.location.hash.replace(/^#/, '')
+    // The fragment is a small space, not a single value: a sign-in link rides
+    // there too, as `#wireguard&login=…`. Only the first segment names a tab.
+    const h = window.location.hash.replace(/^#/, '').split('&')[0]
     return (tabs as readonly string[]).includes(h) ? (h as T) : fallback
   }, [tabs, fallback])
 
