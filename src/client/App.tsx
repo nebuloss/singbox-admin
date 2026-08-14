@@ -13,6 +13,7 @@ import {
   FormModal,
   IconButton,
   LangToggle,
+  Modal,
   Row,
   Switch,
   TonalButton,
@@ -92,7 +93,19 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    void refresh()
+    // A sign-in link lands here as a fragment. Spend it, wipe it from the
+    // address bar before anything can copy it down, then carry on as usual.
+    const token = /(?:^|[#&])login=([0-9a-fA-F-]{36})/.exec(window.location.hash)?.[1]
+    if (!token) {
+      void refresh()
+      return
+    }
+    // Leave a real page in the address bar, not a bare URL: the token goes,
+    // and what replaces it is somewhere the interface can actually be.
+    history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${TABS[0]}`)
+    void api('/api/session/claim', { method: 'POST', body: JSON.stringify({ token }) })
+      .catch((e) => setError((e as Error).message))
+      .finally(() => void refresh())
   }, [refresh])
 
   const act = async (fn: () => Promise<unknown>) => {
@@ -1002,6 +1015,7 @@ function SettingsTab({
   const [open, setOpen] = useState(false)
   const [rotating, setRotating] = useState(false)
   const [address, setAddress] = useState(false)
+  const [linking, setLinking] = useState(false)
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -1059,6 +1073,18 @@ function SettingsTab({
         />
       </Card>
 
+      <Card className="mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-56 flex-1">
+            <h2 className="text-xl leading-7 font-normal">{t('Lien de connexion')}</h2>
+            <p className="mt-1 text-sm text-on-surface-variant">
+              {t('À scanner depuis un autre appareil pour s’y connecter sans retaper le mot de passe. Valable une seule fois, quelques minutes.')}
+            </p>
+          </div>
+          <TonalButton onClick={() => setLinking(true)}>{t('Créer')}</TonalButton>
+        </div>
+      </Card>
+
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -1070,6 +1096,8 @@ function SettingsTab({
           <TonalButton onClick={() => setOpen(true)}>{t('Changer')}</TonalButton>
         </div>
       </Card>
+
+      {linking && <SignInLinkModal onClose={() => setLinking(false)} />}
 
       {address && (
         <PublicUrlModal current={state.publicUrl ?? ''} act={act} onClose={() => setAddress(false)} />
@@ -1161,6 +1189,45 @@ function PublicUrlModal({
         {t('Laissez vide pour déduire l’adresse de votre accès à cette interface. Sur ce nom, publiez la règle donnée plus bas : l’interface d’administration, elle, n’a rien à faire sur Internet.')}
       </p>
     </FormModal>
+  )
+}
+
+function SignInLinkModal({ onClose }: { onClose: () => void }) {
+  const t = useT()
+  const [link, setLink] = useState<{ url: string; qr: string; minutes: number } | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api('/api/session/link', { method: 'POST' })
+      .then(setLink)
+      .catch((e) => setError((e as Error).message))
+  }, [])
+
+  return (
+    <Modal title={t('Lien de connexion')} onClose={onClose}>
+      {error && <Banner tone="error">{t(error)}</Banner>}
+      {!error && !link && (
+        <div className="grid place-items-center py-8">
+          <div className="size-8 animate-spin rounded-full border-4 border-outline-variant border-t-primary" />
+        </div>
+      )}
+      {link && (
+        <div className="flex flex-col items-center gap-4">
+          <div className="size-44 rounded-[var(--radius-md3-m)] bg-white p-2 [&>div>svg]:size-full">
+            <div dangerouslySetInnerHTML={{ __html: link.qr }} />
+          </div>
+          <p className="text-center text-xs text-balance text-on-surface-variant">
+            {t('Utilisable une seule fois, et seulement quelques minutes. Il ouvre l’administration : ne le laissez pas traîner.')}
+          </p>
+          <Copyable label={t('Lien')} value={link.url} copyLabel={t('Copier le lien')} />
+        </div>
+      )}
+      <div className="mt-6 flex justify-end">
+        <FilledButton type="button" onClick={onClose}>
+          {t('Fermer')}
+        </FilledButton>
+      </div>
+    </Modal>
   )
 }
 

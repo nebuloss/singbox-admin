@@ -732,6 +732,50 @@ app.post('/api/password', requireAuth, (req, res) => {
   res.json({ ok: true })
 })
 
+/**
+ * A sign-in link, made from a session and spent once.
+ *
+ * Meant to be created where you are already signed in and scanned where you are
+ * not — a phone, mostly, which is where typing a long password is worst.
+ *
+ * The token rides in the URL fragment, which browsers never send to a server:
+ * it cannot turn up in an access log, a proxy's history or a Referer header the
+ * way a query string would. It is worth as much as the password while it lives,
+ * so it lives briefly and dies on first use, whether that use succeeds or not.
+ */
+const LINK_TTL = Number(process.env.LINK_MINUTES ?? 10) * 60_000
+const loginLinks = new Map<string, number>()
+
+app.post('/api/session/link', requireAuth, async (req, res) => {
+  const now = Date.now()
+  for (const [token, expiry] of loginLinks) if (expiry < now) loginLinks.delete(token)
+
+  // An identifier, like everything else here. A hundred and twenty-two random
+  // bits are far past guessing for something that lives ten minutes and once.
+  const token = crypto.randomUUID()
+  loginLinks.set(token, now + LINK_TTL)
+
+  const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0] || req.protocol
+  // Built from the address this interface was reached on, not the tunnel's:
+  // the administration lives on the internal name and stays there.
+  const url = `${proto}://${req.get('host')}/#login=${token}`
+  res.json({ url, minutes: Math.round(LINK_TTL / 60_000), qr: await QRCode.toString(url, { type: 'svg', margin: 1 }) })
+})
+
+app.post('/api/session/claim', (req, res) => {
+  const token = String(req.body?.token ?? '')
+  const expiry = loginLinks.get(token)
+  // Spent on sight: a link that failed is a link that is gone.
+  loginLinks.delete(token)
+  if (!expiry || expiry < Date.now())
+    return res.status(401).json({ error: 'lien expire ou deja utilise' })
+
+  const session = crypto.randomBytes(32).toString('hex')
+  sessions.add(session)
+  res.cookie('sbsession', session, { httpOnly: true, sameSite: 'strict', secure: true, maxAge: 12 * 3600e3 })
+  res.json({ ok: true })
+})
+
 app.post('/api/logout', (req, res) => {
   const t = req.cookies?.sbsession
   if (typeof t === 'string') sessions.delete(t)

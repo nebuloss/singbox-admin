@@ -123,6 +123,14 @@ const EN: Record<string, string> = {
   Version: 'Version',
   'Nom public': 'Public hostname',
   'Adresse publique': 'Public address',
+  'Lien de connexion': 'Sign-in link',
+  Créer: 'Create',
+  Lien: 'Link',
+  'À scanner depuis un autre appareil pour s’y connecter sans retaper le mot de passe. Valable une seule fois, quelques minutes.':
+    'Scan it from another device to sign in there without typing the password again. Good once, for a few minutes.',
+  'Utilisable une seule fois, et seulement quelques minutes. Il ouvre l’administration : ne le laissez pas traîner.':
+    'Good once, and only for a few minutes. It opens the administration: do not leave it lying about.',
+  'lien expire ou deja utilise': 'link expired or already used',
   'Reverse proxy': 'Reverse proxy',
   'Configuration nginx': 'nginx configuration',
   'Copier la configuration': 'Copy the configuration',
