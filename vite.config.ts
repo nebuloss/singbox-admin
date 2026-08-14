@@ -4,7 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'path'
 
 // The SPA talks to the Express API on the same origin, so in development we
-// proxy /api to the server started with `npm start` (or tsx server.ts).
+// proxy /api to the server started with `npm start` (or tsx server/server.ts).
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { '@': resolve(__dirname, './src') } },
