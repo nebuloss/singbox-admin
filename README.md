@@ -27,10 +27,15 @@ up, both on the card:
   carries no DNS: the format has no field for one, which is why a device set up
   from a link resolves internal names however it likes, and usually fails them.
 
-The subscription URL is built from the address you reached the interface on, so
-it works wherever the interface is published — and only there. Import it once
-from a network that can reach it; the profile then works from anywhere, only
-its automatic refresh needs that address again.
+Both are built from one setting, the **public address** — where the tunnel
+answers and where profiles are fetched, which is the same host in any sane
+deployment. Set it under Settings; leave it empty and it is inferred from how
+you reached the interface, which is right on a first visit and wrong as soon as
+the interface lives on an internal name a phone cannot resolve.
+
+On that public name, publish the tunnel and the `/sub/` path. Do not publish
+the admin interface: it is one shared password with no audit trail, and its
+place is the internal name.
 
 There are two different ways to take access away:
 
@@ -262,8 +267,8 @@ Pushing a `v*` tag builds and publishes a release through GitHub Actions.
 | variable | default | meaning |
 |---|---|---|
 | `ADMIN_PASSWORD` | — | optional initial password, hashed at install; omit it and the interface asks on first visit |
-| `PUBLIC_HOST` | `example.com` | hostname clients connect to, used to build links |
-| `PUBLIC_PORT` | `443` | port clients connect to |
+| `PUBLIC_HOST` | — | seeds the public address on first start; afterwards it is a setting |
+| `PUBLIC_PORT` | `443` | port that goes with it, when it is not 443 |
 | `SINGBOX_CONFIG` | `/etc/sing-box/config.json` | configuration file to manage |
 | `SINGBOX_SERVICE` | `sing-box` | service name to restart |
 | `APP_PORT` | `3000` | port the interface listens on |

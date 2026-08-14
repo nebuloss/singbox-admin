@@ -33,8 +33,11 @@ app.use(cookieParser())
 const PORT = Number(process.env.PORT ?? 3000)
 const CONFIG_PATH = process.env.SINGBOX_CONFIG ?? '/etc/sing-box/config.json'
 const SERVICE = process.env.SINGBOX_SERVICE ?? 'sing-box'
-const PUBLIC_HOST = process.env.PUBLIC_HOST ?? 'example.com'
-const PUBLIC_PORT = Number(process.env.PUBLIC_PORT ?? 443)
+// PUBLIC_HOST / PUBLIC_PORT are a bootstrap, like ADMIN_PASSWORD: they seed
+// the public address on first start and are never read again. From then on the
+// address is a setting, editable in the interface — see publicBase().
+const BOOTSTRAP_HOST = process.env.PUBLIC_HOST ?? ''
+const BOOTSTRAP_PORT = Number(process.env.PUBLIC_PORT ?? 443)
 // The app's own config: the password hash and the display names. Named apart
 // from SINGBOX_CONFIG on purpose — both files are called config.json, and the
 // two must never be confused for one another. ADMIN_PASSWORD is a bootstrap
@@ -45,6 +48,13 @@ if (!readAdminConfig(ADMIN_CONFIG).password && process.env.ADMIN_PASSWORD) {
   updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, password }))
   console.log(`mot de passe initial hache dans ${ADMIN_CONFIG}`)
 }
+if (!readAdminConfig(ADMIN_CONFIG).publicUrl && BOOTSTRAP_HOST && BOOTSTRAP_HOST !== 'example.com') {
+  const port = BOOTSTRAP_PORT === 443 ? '' : `:${BOOTSTRAP_PORT}`
+  const seeded = `https://${BOOTSTRAP_HOST}${port}`
+  updateAdminConfig(ADMIN_CONFIG, (c) => ({ ...c, publicUrl: seeded }))
+  console.log(`adresse publique initialisee a ${seeded}`)
+}
+
 const credential = () => readAdminConfig(ADMIN_CONFIG).password
 const readOnly = () => credential() === null
 
@@ -172,16 +182,16 @@ async function commit(cfg: Config): Promise<void> {
   }
 }
 
-function linkFor(user: User, name: string | undefined, wsPath: string): string {
+function linkFor(user: User, name: string | undefined, wsPath: string, base: PublicBase): string {
   const label = encodeURIComponent(name || user.uuid.slice(0, 8))
   const q = new URLSearchParams({
     encryption: 'none',
     security: 'tls',
-    sni: PUBLIC_HOST,
+    sni: base.host,
     type: 'ws',
     path: wsPath,
   })
-  return `vless://${user.uuid}@${PUBLIC_HOST}:${PUBLIC_PORT}?${q}#${label}`
+  return `vless://${user.uuid}@${base.host}:${base.port}?${q}#${label}`
 }
 
 /**
@@ -193,7 +203,7 @@ function linkFor(user: User, name: string | undefined, wsPath: string): string {
  * here is the tunnel's own, reached through the proxy, so an internal name
  * gets its internal answer wherever the device happens to be.
  */
-function clientProfile(user: User, cfg: Config, wsPath: string) {
+function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase) {
   const serving = wgEndpoints(cfg).find((e) => isEnabled(e.tag))
   const resolver = serving ? dnsFor(cfg, serving)?.server : undefined
   const internal = serving?.peers?.[0]?.allowed_ips ?? []
@@ -221,10 +231,10 @@ function clientProfile(user: User, cfg: Config, wsPath: string) {
       {
         type: 'vless',
         tag: 'proxy',
-        server: PUBLIC_HOST,
-        server_port: PUBLIC_PORT,
+        server: base.host,
+        server_port: base.port,
         uuid: user.uuid,
-        tls: { enabled: true, server_name: PUBLIC_HOST },
+        tls: { enabled: true, server_name: base.host },
         transport: { type: 'ws', path: wsPath },
       },
       { type: 'direct', tag: 'direct' },
@@ -245,19 +255,33 @@ function clientProfile(user: User, cfg: Config, wsPath: string) {
 }
 
 /**
- * Where a device should fetch its profile.
+ * The one public address, and everything derived from it.
  *
- * Defaults to however the interface was reached, which is right when that
- * address is reachable from the device. It rarely is: the interface belongs on
- * an internal network, and the phone is not on it. Hence the setting — publish
- * the `/sub/` path alone on a public name and put that name here, rather than
- * exposing an interface guarded by one shared password.
+ * A device needs to know two things: where the tunnel answers, and where to
+ * fetch its profile. Both are the same host in every sane deployment, so they
+ * are one setting rather than two — an origin like `https://tunnel.example.com`
+ * or `https://tunnel.example.com:8443`.
+ *
+ * Unset, it falls back to however the interface was reached. That is right on
+ * a first visit and wrong as soon as the interface lives on an internal name
+ * the phone cannot resolve, which is why it is worth setting.
  */
-function subscriptionUrl(req: express.Request, uuid: string): string {
+type PublicBase = { origin: string; host: string; port: number }
+
+function publicBase(req: express.Request): PublicBase {
   const configured = readAdminConfig(ADMIN_CONFIG).publicUrl
-  if (configured) return `${configured.replace(/\/+$/, '')}/sub/${uuid}`
   const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0] || req.protocol
-  return `${proto}://${req.get('host')}/sub/${uuid}`
+  const raw = configured ?? `${proto}://${req.get('host') ?? 'example.com'}`
+  try {
+    const url = new URL(raw)
+    return {
+      origin: url.origin,
+      host: url.hostname,
+      port: Number(url.port) || (url.protocol === 'http:' ? 80 : 443),
+    }
+  } catch {
+    return { origin: 'https://example.com', host: 'example.com', port: 443 }
+  }
 }
 
 /**
@@ -569,10 +593,11 @@ app.get('/api/state', async (req, res) => {
     // Suspended devices keep the public link — it is what makes them work
     // again the moment they are put back.
     const names = readAdminConfig(ADMIN_CONFIG).names
+    const base = publicBase(req)
     const describe = async (u: User, enabled: boolean) => {
       const name = names[u.uuid]
-      const link = linkFor(u, name, wsPath)
-      const sub = subscriptionUrl(req, u.uuid)
+      const link = linkFor(u, name, wsPath, base)
+      const sub = `${base.origin}/sub/${u.uuid}`
       // The QR carries the subscription rather than the bare link: same device,
       // but it arrives configured, DNS included.
       return { uuid: u.uuid, name, link, sub, enabled, qr: await QRCode.toString(sub, { type: 'svg', margin: 1 }) }
@@ -585,7 +610,7 @@ app.get('/api/state', async (req, res) => {
       authed: true,
       users,
       service: { running: /started|running|active/i.test(status.out), version },
-      tunnel: { host: PUBLIC_HOST, port: PUBLIC_PORT, path: wsPath },
+      tunnel: { host: base.host, port: base.port, path: wsPath },
       publicUrl: readAdminConfig(ADMIN_CONFIG).publicUrl,
       wireguard: wireguardSummary(cfg, names),
     })
@@ -958,7 +983,9 @@ app.get('/sub/:uuid', (req, res) => {
     const name = readAdminConfig(ADMIN_CONFIG).names[user.uuid] ?? user.uuid.slice(0, 8)
     res.set('profile-title', `base64:${Buffer.from(name, 'utf8').toString('base64')}`)
     res.set('profile-update-interval', '24')
-    res.type('application/json').send(JSON.stringify(clientProfile(user, cfg, wsPath), null, 2))
+    res.type('application/json').send(
+      JSON.stringify(clientProfile(user, cfg, wsPath, publicBase(req)), null, 2),
+    )
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
   }

@@ -992,9 +992,6 @@ function SettingsTab({
           <tbody>
             <Row label={t('État')}>{state.service?.running ? t('actif') : t('arrêté')}</Row>
             <Row label={t('Version')}>{state.service?.version}</Row>
-            <Row label={t('Nom public')}>
-              {state.tunnel?.host}:{state.tunnel?.port}
-            </Row>
             <Row label={t('Chemin WebSocket')}>{state.tunnel?.path}</Row>
           </tbody>
         </table>
@@ -1011,12 +1008,13 @@ function SettingsTab({
       <Card className="mb-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-56 flex-1">
-            <h2 className="text-xl leading-7 font-normal">{t('Adresse des abonnements')}</h2>
+            <h2 className="text-xl leading-7 font-normal">{t('Adresse publique')}</h2>
             <p className="mt-1 text-sm break-all text-on-surface-variant">
-              {state.publicUrl ?? t('Celle par laquelle vous avez ouvert cette interface.')}
+              {state.publicUrl ?? `${state.tunnel?.host}:${state.tunnel?.port}`}
+              {!state.publicUrl && ` — ${t('déduite de votre accès à cette interface')}`}
             </p>
             <p className="mt-2 text-xs text-on-surface-variant">
-              {t('C’est l’adresse que les appareils utiliseront pour récupérer leur profil : elle doit être joignable depuis eux.')}
+              {t('Une seule adresse pour tout : c’est là que les appareils se connectent au tunnel et qu’ils vont chercher leur profil. Elle doit être joignable depuis eux.')}
             </p>
           </div>
           <TonalButton disabled={busy} onClick={() => setAddress(true)}>{t('Modifier')}</TonalButton>
@@ -1106,7 +1104,7 @@ function PublicUrlModal({
 
   return (
     <FormModal
-      title={t('Adresse des abonnements')}
+      title={t('Adresse publique')}
       disabled={malformed || trimmed === current}
       onClose={onClose}
       onSubmit={async () => {
@@ -1122,7 +1120,7 @@ function PublicUrlModal({
         error={malformed ? t('Attendu : https://nom.example.com') : undefined}
       />
       <p className="text-xs text-on-surface-variant">
-        {t('Laissez vide pour utiliser l’adresse par laquelle vous ouvrez cette interface. Publiez de préférence le seul chemin /sub/ sur ce nom : l’interface d’administration n’a rien à faire sur Internet.')}
+        {t('Laissez vide pour déduire l’adresse de votre accès à cette interface. Sur ce nom, publiez le tunnel et le chemin /sub/ : l’interface d’administration, elle, n’a rien à faire sur Internet.')}
       </p>
     </FormModal>
   )

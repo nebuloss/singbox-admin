@@ -116,15 +116,13 @@ const EN: Record<string, string> = {
   arrêté: 'stopped',
   Version: 'Version',
   'Nom public': 'Public hostname',
-  'Adresse des abonnements': 'Subscription address',
   'Adresse publique': 'Public address',
-  'Celle par laquelle vous avez ouvert cette interface.':
-    'The one you opened this interface on.',
-  'C’est l’adresse que les appareils utiliseront pour récupérer leur profil : elle doit être joignable depuis eux.':
-    'This is the address devices will fetch their profile from: it has to be reachable from them.',
+  'déduite de votre accès à cette interface': 'inferred from how you reached this interface',
+  'Une seule adresse pour tout : c’est là que les appareils se connectent au tunnel et qu’ils vont chercher leur profil. Elle doit être joignable depuis eux.':
+    'One address for everything: it is where devices connect to the tunnel and where they fetch their profile. It has to be reachable from them.',
   'Attendu : https://nom.example.com': 'Expected: https://name.example.com',
-  'Laissez vide pour utiliser l’adresse par laquelle vous ouvrez cette interface. Publiez de préférence le seul chemin /sub/ sur ce nom : l’interface d’administration n’a rien à faire sur Internet.':
-    'Leave empty to use the address you open this interface on. Prefer publishing only the /sub/ path on that name: the admin interface has no business on the internet.',
+  'Laissez vide pour déduire l’adresse de votre accès à cette interface. Sur ce nom, publiez le tunnel et le chemin /sub/ : l’interface d’administration, elle, n’a rien à faire sur Internet.':
+    'Leave empty to infer it from how you reached this interface. On that name, publish the tunnel and the /sub/ path: the admin interface itself has no business on the internet.',
   'adresse invalide': 'invalid address',
   'Chemin WebSocket': 'WebSocket path',
   Régénérer: 'Regenerate',
