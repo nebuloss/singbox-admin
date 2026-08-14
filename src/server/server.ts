@@ -208,6 +208,23 @@ const dropUuids = (inbound: Inbound | undefined, uuids: string[]) => {
  * On any failure the previous file is restored, so a bad edit can never leave
  * the tunnel down.
  */
+/**
+ * One writer at a time.
+ *
+ * Every mutation reads the configuration, changes it, and writes it back with
+ * an await in between — so two of them overlapping would have the second write
+ * erase the first's change. That is not hypothetical here: several devices can
+ * fetch their profile at once, each replacing its own credential, and the
+ * sweep runs on a timer regardless of what else is happening.
+ */
+let writing: Promise<unknown> = Promise.resolve()
+
+function serialise<T>(work: () => Promise<T>): Promise<T> {
+  const next = writing.then(work, work)
+  writing = next.catch(() => undefined)
+  return next
+}
+
 async function commit(cfg: Config): Promise<void> {
   // Whatever the caller was changing, the file comes out tidy.
   tidyShelf(cfg)
@@ -583,11 +600,13 @@ function applyTunnelState(cfg: Config, on: boolean) {
  * state is encoded in the rules being rebuilt, so reading it afterwards reads
  * the rebuild, not the intent.
  */
-async function withTunnels(cfg: Config, change: () => void, force?: boolean): Promise<void> {
-  const on = force ?? activeTarget(cfg) !== null
-  change()
-  applyTunnelState(cfg, on)
-  await commit(cfg)
+function withTunnels(cfg: Config, change: () => void, force?: boolean): Promise<void> {
+  return serialise(async () => {
+    const on = force ?? activeTarget(cfg) !== null
+    change()
+    applyTunnelState(cfg, on)
+    await commit(cfg)
+  })
 }
 
 function wireguardSummary(cfg: Config, tunnels: Names) {
@@ -759,7 +778,11 @@ const deviceEntries = (admin: AdminConfig): [string, string][] =>
  * Rate-limited: a device that fetches its profile in a loop must not grow the
  * credential list without bound.
  */
-async function rotate(token: string, device: Device): Promise<string> {
+function rotate(token: string, device: Device): Promise<string> {
+  return serialise(() => rotateNow(token, device))
+}
+
+async function rotateNow(token: string, device: Device): Promise<string> {
   const now = Date.now()
   const last = device.rotated ? Date.parse(device.rotated) : 0
   if (Number.isFinite(last) && now - last < ROTATE_EVERY) return device.uuids[0]
@@ -1202,17 +1225,25 @@ function observeLog(): Record<string, string> {
   return seen
 }
 
-async function sweep(): Promise<void> {
+const sweep = () => serialise(sweepNow)
+
+async function sweepNow(): Promise<void> {
   const fresh = observeLog()
   const now = Date.now()
 
   const stale: string[] = []
   updateAdminConfig(ADMIN_CONFIG, (c) => {
     const seen = { ...c.seen, ...fresh }
+    const at = (uuid: string) => (seen[uuid] ? Date.parse(seen[uuid]) : 0)
     for (const device of Object.values(c.devices)) {
+      // Only retire once the current credential has been seen more recently
+      // than the one being retired. That proves two things at once: the device
+      // has moved on, and connections are being logged at all. Without it, a
+      // log turned down to warnings would look like silence, and a device
+      // still on its old credential would be cut off.
+      const current = at(device.uuids[0])
       for (const uuid of device.uuids.slice(1)) {
-        const last = seen[uuid] ? Date.parse(seen[uuid]) : 0
-        if (now - last > IDLE_RETIRE) stale.push(uuid)
+        if (current > at(uuid) && now - at(uuid) > IDLE_RETIRE) stale.push(uuid)
       }
     }
     if (!stale.length) return { ...c, seen }
