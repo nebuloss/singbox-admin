@@ -232,7 +232,11 @@ function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase
       servers: [
         // Through the proxy, so it answers with what the tunnel can reach.
         { type: 'udp', tag: 'remote', server: resolver ?? '1.1.1.1', detour: 'proxy' },
-        { type: 'udp', tag: 'local', server: '1.1.1.1' },
+        // The device's own resolver, whatever the network handed it. Used for
+        // one thing only — finding the tunnel — and it has to be this rather
+        // than a public address: a captive portal will hand you a resolver and
+        // block everything else, which is exactly where a tunnel is wanted.
+        { type: 'local', tag: 'local' },
       ],
       final: 'remote',
     },
@@ -254,6 +258,11 @@ function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase
         uuid: user.uuid,
         tls: { enabled: true, server_name: base.host },
         transport: { type: 'ws', path: wsPath },
+        // Resolve the tunnel's own address without the tunnel. Left to the
+        // default it would ask a resolver reached through the proxy, and the
+        // proxy is what it is trying to find: the lookup times out and nothing
+        // ever connects.
+        domain_resolver: 'local',
       },
       { type: 'direct', tag: 'direct' },
     ],
