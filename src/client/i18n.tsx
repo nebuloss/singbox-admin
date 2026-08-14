@@ -53,6 +53,8 @@ const EN: Record<string, string> = {
   'Copier l’abonnement': 'Copy the subscription',
   'Abonnement — importez ceci, le DNS est compris':
     'Subscription — import this one, DNS included',
+  'Une seule règle : un chemin en forme d’identifiant est un appareil qui demande son profil, tout le reste appartient au tunnel. Le proxy ne connaît qu’une forme, jamais le chemin du tunnel — c’est ce qui permet de régénérer celui-ci sans rien changer ici.':
+    'One rule: a path shaped like an identifier is a device asking for its profile, everything else belongs to the tunnel. The proxy is told a shape, never the tunnel path — which is what allows regenerating it without touching anything here.',
   'Lien simple — sans réglage DNS': 'Plain link — carries no DNS setting',
   Copié: 'Copied',
 
@@ -120,8 +122,6 @@ const EN: Record<string, string> = {
   'Reverse proxy': 'Reverse proxy',
   'Configuration nginx': 'nginx configuration',
   'Copier la configuration': 'Copy the configuration',
-  'À placer sur le nom public. Le chemin du tunnel n’y figure pas : le proxy transmet tout et laisse sing-box refuser ce qu’il ne reconnaît pas, ce qui permet de régénérer ce chemin sans rien changer ici.':
-    'To put on the public name. The tunnel path is not in it: the proxy forwards everything and lets sing-box refuse what it does not recognise, which is what allows regenerating that path without touching anything here.',
   'déduite de votre accès à cette interface': 'inferred from how you reached this interface',
   'Une seule adresse pour tout : c’est là que les appareils se connectent au tunnel et qu’ils vont chercher leur profil. Elle doit être joignable depuis eux.':
     'One address for everything: it is where devices connect to the tunnel and where they fetch their profile. It has to be reachable from them.',

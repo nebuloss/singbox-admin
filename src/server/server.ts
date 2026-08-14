@@ -120,19 +120,18 @@ function readConfig(): Config {
 const PARKED = 'vless-suspended'
 
 /**
- * The two paths on the public name, and who decides them.
+ * One rule decides every path on the public name: a path shaped like a UUID is
+ * a device asking for its profile; anything else belongs to the tunnel.
  *
- * The tunnel's path is a secret this app rewrites at will, and the reverse
- * proxy is deliberately never told it — it forwards everything and lets
- * sing-box refuse what it does not recognise. The subscription prefix is the
- * opposite: fixed, public by design, and the one thing the proxy has to know,
- * because it is the only path that goes to this app rather than to sing-box.
+ * That is all the reverse proxy is ever told — a shape, not a secret. The
+ * tunnel's own path stays unknown to it, which is what lets this app rewrite
+ * that path without anyone else having to hear about it. And there is no
+ * agreed-upon prefix to keep in step on both sides.
  *
- * That asymmetry is the whole arrangement, so the snippet the proxy needs is
- * generated from these values rather than written down twice — see
- * proxySnippet().
+ * The two can never collide: a generated tunnel path is hex without dashes and
+ * a different length, so it cannot be mistaken for an identifier.
  */
-const SUB_PREFIX = '/sub/'
+const UUID_PATH = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
 
 const vlessInbounds = (cfg: Config) => (cfg.inbounds ?? []).filter((i) => i.type === 'vless')
 
@@ -304,8 +303,8 @@ function proxySnippet(cfg: Config, appPort: number): string {
     '  try_files /index.html =404;',
     '}',
     '',
-    "# Le profil d'un appareil. Seul chemin qui va a l'interface, pas au tunnel.",
-    `location ${SUB_PREFIX} {`,
+    "# Un chemin en forme d'UUID est un appareil qui demande son profil.",
+    `location ~ "^/${UUID_PATH}$" {`,
     `  proxy_pass http://${host}:${appPort};`,
     '  proxy_set_header Host $host;',
     '  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
@@ -669,7 +668,7 @@ app.get('/api/state', async (req, res) => {
     const describe = async (u: User, enabled: boolean) => {
       const name = names[u.uuid]
       const link = linkFor(u, name, wsPath, base)
-      const sub = `${base.origin}${SUB_PREFIX}${u.uuid}`
+      const sub = `${base.origin}/${u.uuid}`
       // The QR carries the subscription rather than the bare link: same device,
       // but it arrives configured, DNS included.
       return { uuid: u.uuid, name, link, sub, enabled, qr: await QRCode.toString(sub, { type: 'svg', margin: 1 }) }
@@ -1033,7 +1032,7 @@ app.delete('/api/wireguard/:tag', requireAuth, async (req, res) => {
  * the same credential the link carries, so a device that can use one can fetch
  * the other, and nothing else can.
  */
-app.get(`${SUB_PREFIX}:uuid`, (req, res) => {
+app.get(`/:uuid(${UUID_PATH})`, (req, res) => {
   try {
     const cfg = readConfig()
     const user = allUsers(cfg).find((u) => u.uuid === req.params.uuid)

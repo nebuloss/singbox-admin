@@ -1025,7 +1025,7 @@ function SettingsTab({
       <Card className="mb-6">
         <h2 className="text-xl leading-7 font-normal">{t('Reverse proxy')}</h2>
         <p className="mt-1 mb-4 text-sm text-on-surface-variant">
-          {t('À placer sur le nom public. Le chemin du tunnel n’y figure pas : le proxy transmet tout et laisse sing-box refuser ce qu’il ne reconnaît pas, ce qui permet de régénérer ce chemin sans rien changer ici.')}
+          {t('Une seule règle : un chemin en forme d’identifiant est un appareil qui demande son profil, tout le reste appartient au tunnel. Le proxy ne connaît qu’une forme, jamais le chemin du tunnel — c’est ce qui permet de régénérer celui-ci sans rien changer ici.')}
         </p>
         <Copyable
           label={t('Configuration nginx')}
