@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useState } from 'react'
 
 type User = { uuid: string; name?: string; link: string; qr: string }
+type Wireguard = {
+  address: string[]
+  peer: string | null
+  publicKey: string | null
+  allowedIps: string[]
+  keepalive: number | null
+  presharedKey: boolean
+}
 type State = {
   authed: boolean
-  readOnly?: boolean
+  setup?: boolean
   users?: User[]
   service?: { running: boolean; version: string }
   tunnel?: { host: string; port: number; path: string }
+  wireguard?: Wireguard | null
 }
 
 const api = async (url: string, init?: RequestInit) => {
@@ -19,6 +28,7 @@ const api = async (url: string, init?: RequestInit) => {
 export default function App() {
   const [state, setState] = useState<State | null>(null)
   const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [newName, setNewName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -71,11 +81,40 @@ export default function App() {
             <p className="mt-2 text-base text-on-surface-variant">Administration du tunnel</p>
           </div>
 
-          {state.readOnly ? (
-            <Banner tone="error">
-              <code className="font-mono text-sm">ADMIN_PASSWORD</code> n'est pas défini sur le
-              serveur : l'administration est désactivée.
-            </Banner>
+          {state.setup ? (
+            // First run: no password is set yet, so we ask for one instead of
+            // refusing access. Whoever reaches the app first claims it — hence
+            // the warning, and hence resetting requires root on the host.
+            <form
+              className="flex flex-col gap-4"
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (password !== confirm) return setError('les deux saisies diffèrent')
+                void act(() =>
+                  api('/api/setup', { method: 'POST', body: JSON.stringify({ password }) }),
+                )
+              }}
+            >
+              <Banner>
+                Première configuration : choisissez le mot de passe d’administration.
+              </Banner>
+              <Field
+                label="Mot de passe"
+                type="password"
+                value={password}
+                autoFocus
+                onChange={setPassword}
+              />
+              <Field label="Confirmer" type="password" value={confirm} onChange={setConfirm} />
+              <p className="text-xs text-on-surface-variant">10 caractères minimum.</p>
+              {error && <Banner tone="error">{error}</Banner>}
+              <FilledButton
+                disabled={busy || password.length < 10 || !confirm}
+                className="mt-2 h-12 w-full justify-center"
+              >
+                Définir le mot de passe
+              </FilledButton>
+            </form>
           ) : (
             <form
               className="flex flex-col gap-4"
@@ -182,6 +221,7 @@ export default function App() {
         ))}
       </ul>
 
+      <WireguardCard wg={state.wireguard} onChange={() => void refresh()} />
       <Clients />
       <PasswordCard />
     </Shell>
@@ -251,6 +291,131 @@ function UserCard({ user, busy, onDelete }: { user: User; busy: boolean; onDelet
         </div>
       </div>
     </li>
+  )
+}
+
+/* ── WireGuard ───────────────────────────────────────────────────────────── */
+
+function WireguardCard({ wg, onChange }: { wg: Wireguard | null | undefined; onChange: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [conf, setConf] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [confirming, setConfirming] = useState(false)
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      await api('/api/wireguard', { method: 'POST', body: JSON.stringify({ config: conf }) })
+      setConf('')
+      setOpen(false)
+      onChange()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api('/api/wireguard', { method: 'DELETE' })
+      setConfirming(false)
+      onChange()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="mt-8">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-xl leading-7 font-normal text-on-surface">Sortie WireGuard</h2>
+          <p className="mt-1 text-sm text-on-surface-variant">
+            {wg
+              ? 'Le trafic des appareils ressort par ce tunnel.'
+              : 'Optionnel : faire ressortir le trafic par un tunnel WireGuard existant.'}
+          </p>
+        </div>
+        {!open && (
+          <TonalButton onClick={() => { setError(''); setOpen(true) }}>
+            {wg ? 'Remplacer' : 'Configurer'}
+          </TonalButton>
+        )}
+      </div>
+
+      {wg && !open && (
+        <div className="mt-5 flex flex-col gap-3">
+          <table className="w-full text-sm">
+            <tbody>
+              <Row label="Pair">{wg.peer}</Row>
+              <Row label="Adresse dans le tunnel">{wg.address.join(', ')}</Row>
+              <Row label="Réseaux routés">{wg.allowedIps.join(', ')}</Row>
+              <Row label="Keepalive">{wg.keepalive ? `${wg.keepalive} s` : '—'}</Row>
+              <Row label="Clé partagée">{wg.presharedKey ? 'oui' : 'non'}</Row>
+            </tbody>
+          </table>
+          <div className="flex justify-end">
+            {confirming ? (
+              <span className="flex gap-1">
+                <TextButton tone="error" disabled={busy} onClick={remove}>
+                  Confirmer la suppression
+                </TextButton>
+                <TextButton onClick={() => setConfirming(false)}>Annuler</TextButton>
+              </span>
+            ) : (
+              <TextButton tone="error" onClick={() => setConfirming(true)}>
+                Supprimer le tunnel
+              </TextButton>
+            )}
+          </div>
+        </div>
+      )}
+
+      {open && (
+        <form className="mt-5 flex flex-col gap-3" onSubmit={submit}>
+          <p className="text-sm text-on-surface-variant">
+            Collez la configuration WireGuard fournie par votre routeur ou votre fournisseur.
+          </p>
+          <textarea
+            autoFocus
+            rows={11}
+            value={conf}
+            onChange={(e) => setConf(e.target.value)}
+            spellCheck={false}
+            placeholder={'[Interface]\nPrivateKey = …\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = …\nAllowedIPs = 10.0.0.0/8\nEndpoint = vpn.example.com:51820'}
+            className="w-full resize-y rounded-[var(--radius-md3-m)] border border-outline bg-surface-low p-3 font-mono text-xs leading-relaxed text-on-surface outline-none focus:border-2 focus:border-primary"
+          />
+          <p className="text-xs text-on-surface-variant">
+            Seuls les réseaux listés dans <code>AllowedIPs</code> passeront par le tunnel. La clé
+            privée est stockée dans la configuration de sing-box et n’est jamais réaffichée.
+          </p>
+          {error && <Banner tone="error">{error}</Banner>}
+          <div className="flex justify-end gap-2">
+            <TextButton onClick={() => setOpen(false)}>Annuler</TextButton>
+            <FilledButton disabled={busy || !conf.trim()}>Appliquer</FilledButton>
+          </div>
+        </form>
+      )}
+
+      {error && !open && <Banner tone="error" className="mt-4">{error}</Banner>}
+    </Card>
+  )
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <tr>
+      <td className="py-1 pr-4 align-top whitespace-nowrap text-on-surface-variant">{label}</td>
+      <td className="py-1 font-mono text-xs break-all">{children}</td>
+    </tr>
   )
 }
 

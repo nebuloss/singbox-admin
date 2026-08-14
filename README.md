@@ -91,7 +91,7 @@ Pushing a `v*` tag builds and publishes a release through GitHub Actions.
 
 | variable | default | meaning |
 |---|---|---|
-| `ADMIN_PASSWORD` | — | initial password, hashed at install and then discarded |
+| `ADMIN_PASSWORD` | — | optional initial password, hashed at install; omit it and the interface asks on first visit |
 | `PUBLIC_HOST` | `example.com` | hostname clients connect to, used to build links |
 | `PUBLIC_PORT` | `443` | port clients connect to |
 | `SINGBOX_CONFIG` | `/etc/sing-box/config.json` | configuration file to manage |
@@ -107,8 +107,13 @@ The password can also be changed from the interface.
 curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/scripts/reset-password.sh | sh
 ```
 
-Run on the host, it writes a new hash and restarts the service. Without an
-argument it generates a password and prints it; pass one to choose it.
+Run on the host, it clears the stored credential and restarts the service. The
+interface then shows its first-run screen and asks for a new password, so the
+new one is never printed to a terminal or pasted through a chat log. Pass a
+password as an argument to set it directly instead.
+
+Existing clients are untouched: resetting the interface password does not
+revoke a single device.
 
 ## Security model
 

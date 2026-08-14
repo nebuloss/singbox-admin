@@ -6,7 +6,8 @@
 # picks the new value up on restart.
 #
 # Usage (as root on the appliance):
-#   sh reset-password.sh                 # generates a password and prints it
+#   sh reset-password.sh                 # clears it; the interface then asks
+#                                        # for a new one on the next visit
 #   sh reset-password.sh 'new password'  # sets the one you provide
 #
 # Override APP_DIR if the app is not in /opt/singbox-admin.

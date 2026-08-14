@@ -43,7 +43,24 @@ const readOnly = () => auth === null
 //    rest of the sing-box config untouched, whatever it contains.
 type User = { uuid: string; name?: string }
 type Inbound = { type?: string; users?: User[]; transport?: { path?: string } }
-type Config = { inbounds?: Inbound[] }
+type Peer = {
+  address: string
+  port: number
+  public_key: string
+  pre_shared_key?: string
+  allowed_ips: string[]
+  persistent_keepalive_interval?: number
+}
+type Endpoint = { type: string; tag: string; address: string[]; private_key: string; peers: Peer[] }
+type Rule = { ip_cidr?: string[]; outbound?: string }
+type Config = {
+  inbounds?: Inbound[]
+  endpoints?: Endpoint[]
+  outbounds?: unknown[]
+  route?: { rules?: Rule[]; final?: string; [k: string]: unknown }
+}
+
+const WG_TAG = 'wg-out'
 
 const run = (cmd: string, args: string[]) =>
   new Promise<{ ok: boolean; out: string }>((resolve) => {
@@ -101,6 +118,78 @@ function linkFor(user: User, wsPath: string): string {
   return `vless://${user.uuid}@${PUBLIC_HOST}:${PUBLIC_PORT}?${q}#${label}`
 }
 
+/**
+ * Parse a standard WireGuard client configuration — the .conf a router or
+ * provider hands you — into a sing-box endpoint. Accepting that format
+ * directly avoids retyping five fields and getting one wrong.
+ */
+function parseWireguard(text: string): { endpoint: Endpoint; allowedIps: string[] } {
+  const get = (section: string, key: string): string | undefined => {
+    const re = new RegExp(`\\[${section}\\]([\\s\\S]*?)(?=\\n\\s*\\[|$)`, 'i')
+    const body = re.exec(text)?.[1] ?? ''
+    const line = new RegExp(`^\\s*${key}\\s*=\\s*(.+?)\\s*$`, 'im').exec(body)
+    return line?.[1]
+  }
+
+  const privateKey = get('Interface', 'PrivateKey')
+  const address = get('Interface', 'Address')
+  const publicKey = get('Peer', 'PublicKey')
+  const endpointLine = get('Peer', 'Endpoint')
+  const allowed = get('Peer', 'AllowedIPs') ?? '0.0.0.0/0'
+  const psk = get('Peer', 'PresharedKey')
+  const keepalive = get('Peer', 'PersistentKeepalive')
+
+  if (!privateKey) throw new Error('PrivateKey manquant dans [Interface]')
+  if (!address) throw new Error('Address manquant dans [Interface]')
+  if (!publicKey) throw new Error('PublicKey manquant dans [Peer]')
+  if (!endpointLine) throw new Error('Endpoint manquant dans [Peer]')
+
+  // Endpoint is host:port; the host may be an IPv6 literal in brackets.
+  const m = /^\s*(\[[^\]]+\]|[^:]+):(\d+)\s*$/.exec(endpointLine)
+  if (!m) throw new Error(`Endpoint illisible : ${endpointLine}`)
+  const host = m[1].replace(/^\[|\]$/g, '')
+  const port = Number(m[2])
+
+  const allowedIps = allowed.split(',').map((s) => s.trim()).filter(Boolean)
+
+  const peer: Peer = {
+    address: host,
+    port,
+    public_key: publicKey,
+    allowed_ips: allowedIps,
+    // Without a keepalive the UDP session behind NAT dies after a few idle
+    // minutes, which is exactly when a fallback tunnel is needed.
+    persistent_keepalive_interval: keepalive ? Number(keepalive) : 25,
+  }
+  if (psk) peer.pre_shared_key = psk
+
+  return {
+    endpoint: {
+      type: 'wireguard',
+      tag: WG_TAG,
+      address: address.split(',').map((s) => s.trim()).filter(Boolean),
+      private_key: privateKey,
+      peers: [peer],
+    },
+    allowedIps,
+  }
+}
+
+function wireguardSummary(cfg: Config) {
+  const ep = cfg.endpoints?.find((e) => e.tag === WG_TAG)
+  if (!ep) return null
+  const peer = ep.peers?.[0]
+  // The private key is never returned.
+  return {
+    address: ep.address,
+    peer: peer ? `${peer.address}:${peer.port}` : null,
+    publicKey: peer?.public_key ?? null,
+    allowedIps: peer?.allowed_ips ?? [],
+    keepalive: peer?.persistent_keepalive_interval ?? null,
+    presharedKey: Boolean(peer?.pre_shared_key),
+  }
+}
+
 // ── Auth: one shared password, sessions held in memory. Restarting the service
 //    logs everyone out, which is the desired behaviour for an admin tool.
 const sessions = new Set<string>()
@@ -116,8 +205,31 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
   next()
 }
 
+/**
+ * First run: with no password set the app is not locked but unclaimed, and the
+ * UI asks for one. Anyone who can reach it can claim it, which is why it is
+ * meant to sit on an internal network — and why resetting requires root on the
+ * host rather than being exposed here.
+ */
+app.post('/api/setup', (req, res) => {
+  if (auth) return res.status(409).json({ error: 'un mot de passe est deja defini' })
+  const password = String(req.body?.password ?? '')
+  if (password.length < 10) return res.status(400).json({ error: '10 caracteres minimum' })
+
+  try {
+    auth = writeAuth(AUTH_FILE, password)
+  } catch (e) {
+    return res.status(500).json({ error: `ecriture impossible : ${(e as Error).message}` })
+  }
+
+  const token = crypto.randomBytes(32).toString('hex')
+  sessions.add(token)
+  res.cookie('sbsession', token, { httpOnly: true, sameSite: 'strict', secure: true, maxAge: 12 * 3600e3 })
+  res.json({ ok: true })
+})
+
 app.post('/api/login', (req, res) => {
-  if (!auth) return res.status(503).json({ error: 'aucun mot de passe configure' })
+  if (!auth) return res.status(409).json({ error: 'aucun mot de passe defini' })
   if (!verifyPassword(String(req.body?.password ?? ''), auth.hash))
     return res.status(401).json({ error: 'mot de passe incorrect' })
 
@@ -156,7 +268,7 @@ app.post('/api/logout', (req, res) => {
 })
 
 app.get('/api/state', async (req, res) => {
-  if (!authed(req)) return res.json({ authed: false, readOnly: readOnly() })
+  if (!authed(req)) return res.json({ authed: false, setup: auth === null })
   try {
     const cfg = readConfig()
     const inbound = vlessInbound(cfg)
@@ -175,6 +287,7 @@ app.get('/api/state', async (req, res) => {
       users,
       service: { running: /started|running|active/i.test(status.out), version },
       tunnel: { host: PUBLIC_HOST, port: PUBLIC_PORT, path: wsPath },
+      wireguard: wireguardSummary(cfg),
     })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
@@ -206,6 +319,39 @@ app.delete('/api/users/:uuid', requireAuth, async (req, res) => {
     if (inbound.users.length === before) return res.status(404).json({ error: 'inconnu' })
     if (inbound.users.length === 0)
       return res.status(400).json({ error: 'refus : cela supprimerait le dernier acces' })
+    await commit(cfg)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: String((e as Error).message) })
+  }
+})
+
+app.post('/api/wireguard', requireAuth, async (req, res) => {
+  try {
+    const { endpoint, allowedIps } = parseWireguard(String(req.body?.config ?? ''))
+    const cfg = readConfig()
+
+    cfg.endpoints = [...(cfg.endpoints ?? []).filter((e) => e.tag !== WG_TAG), endpoint]
+    cfg.route = cfg.route ?? {}
+    // Route exactly what the peer accepts through the tunnel, and nothing else,
+    // so a split-tunnel AllowedIPs stays a split tunnel.
+    const rules = (cfg.route.rules ?? []).filter((r) => r.outbound !== WG_TAG)
+    cfg.route.rules = [...rules, { ip_cidr: allowedIps, outbound: WG_TAG }]
+
+    await commit(cfg)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+
+app.delete('/api/wireguard', requireAuth, async (req, res) => {
+  try {
+    const cfg = readConfig()
+    if (!cfg.endpoints?.some((e) => e.tag === WG_TAG))
+      return res.status(404).json({ error: 'aucun tunnel configure' })
+    cfg.endpoints = cfg.endpoints.filter((e) => e.tag !== WG_TAG)
+    if (cfg.route?.rules) cfg.route.rules = cfg.route.rules.filter((r) => r.outbound !== WG_TAG)
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
