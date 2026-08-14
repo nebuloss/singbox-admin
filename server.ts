@@ -60,8 +60,11 @@ type Config = {
   route?: { rules?: Rule[]; final?: string; [k: string]: unknown }
 }
 
-const WG_PREFIX = 'wg'
-const WG_AUTO = 'wg-auto'
+// sing-box rejects unknown keys, so a disabled tunnel cannot carry an
+// "enabled: false" field. The state lives in the tag prefix instead, which
+// keeps the config the single source of truth.
+const WG_ON = 'wg'
+const WG_OFF = 'wgx'
 
 const run = (cmd: string, args: string[]) =>
   new Promise<{ ok: boolean; out: string }>((resolve) => {
@@ -179,78 +182,57 @@ function parseWireguard(text: string): { endpoint: Endpoint; allowedIps: string[
 const slug = (name: string) =>
   name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'wg'
 
-const isWgTag = (tag: string) => tag.startsWith(`${WG_PREFIX}-`)
-const wgName = (tag: string) => tag.slice(WG_PREFIX.length + 1)
-
-/**
- * Which outbound the tunnelled traffic currently leaves by. Either the first
- * profile in order, or the urltest group when automatic switching is on.
- */
-function activeTarget(cfg: Config): string | null {
-  const rule = cfg.route?.rules?.find((r) => r.outbound && (isWgTag(r.outbound) || r.outbound === WG_AUTO))
-  return rule?.outbound ?? null
-}
+const isWgTag = (tag: string) => tag.startsWith(`${WG_ON}-`) || tag.startsWith(`${WG_OFF}-`)
+const isEnabled = (tag: string) => tag.startsWith(`${WG_ON}-`)
+const wgName = (tag: string) => tag.slice(tag.indexOf('-') + 1)
+const withState = (tag: string, on: boolean) => `${on ? WG_ON : WG_OFF}-${wgName(tag)}`
 
 const wgEndpoints = (cfg: Config) => (cfg.endpoints ?? []).filter((e) => isWgTag(e.tag))
+
+/** The tunnel currently carrying traffic, if any. */
+function activeTarget(cfg: Config): string | null {
+  const rule = cfg.route?.rules?.find((r) => r.outbound && isWgTag(r.outbound))
+  return rule?.outbound ?? null
+}
 
 /**
  * Rebuild routing from the profile order.
  *
- * Manual: the first profile in the list serves. Automatic: every profile goes
- * into a urltest group. Note that urltest picks by latency, not by rank —
- * sing-box has no priority mode (SagerNet/sing-box#4065), so order is only
- * meaningful in manual mode and the UI says so.
+ * The first enabled tunnel serves; everything else is left in place but
+ * unreferenced. With the outbound switched off, or with no enabled tunnel,
+ * there is simply no rule and traffic leaves directly — which is also how the
+ * UI derives the global switch, so no extra state is stored anywhere.
  */
-function applyRouting(cfg: Config, failover: boolean) {
+function applyRouting(cfg: Config, on: boolean) {
   cfg.route = cfg.route ?? {}
-  cfg.outbounds = (cfg.outbounds ?? []).filter((o) => (o as { tag?: string })?.tag !== WG_AUTO)
-  cfg.route.rules = (cfg.route.rules ?? []).filter(
-    (r) => !(r.outbound && (isWgTag(r.outbound) || r.outbound === WG_AUTO)),
-  )
+  cfg.route.rules = (cfg.route.rules ?? []).filter((r) => !(r.outbound && isWgTag(r.outbound)))
 
-  const wgs = wgEndpoints(cfg)
-  if (wgs.length === 0) return
+  if (!on) return
+  const first = wgEndpoints(cfg).find((e) => isEnabled(e.tag))
+  if (!first) return
 
-  const auto = failover && wgs.length >= 2
-  const chosen = auto ? wgs : [wgs[0]]
-
-  if (auto) {
-    cfg.outbounds.push({
-      type: 'urltest',
-      tag: WG_AUTO,
-      outbounds: wgs.map((e) => e.tag),
-      url: 'https://www.gstatic.com/generate_204',
-      interval: '3m',
-      tolerance: 50,
-    })
-  }
-
-  // Route the union of what the selected peers accept, so a split tunnel stays
-  // split whichever profile serves.
-  const cidrs = [...new Set(chosen.flatMap((e) => e.peers?.[0]?.allowed_ips ?? []))]
-  cfg.route.rules.push({ ip_cidr: cidrs, outbound: auto ? WG_AUTO : wgs[0].tag })
+  // Route exactly what the peer accepts, so a split tunnel stays split.
+  cfg.route.rules.push({ ip_cidr: first.peers?.[0]?.allowed_ips ?? [], outbound: first.tag })
 }
 
 function wireguardSummary(cfg: Config) {
-  const profiles = (cfg.endpoints ?? [])
-    .filter((e) => isWgTag(e.tag))
-    .map((e) => {
-      const peer = e.peers?.[0]
-      // The private key is never returned.
-      return {
-        tag: e.tag,
-        name: wgName(e.tag),
-        address: e.address,
-        peer: peer ? `${peer.address}:${peer.port}` : null,
-        publicKey: peer?.public_key ?? null,
-        allowedIps: peer?.allowed_ips ?? [],
-        keepalive: peer?.persistent_keepalive_interval ?? null,
-        presharedKey: Boolean(peer?.pre_shared_key),
-      }
-    })
-
-  const target = activeTarget(cfg)
-  return { profiles, active: target, failover: target === WG_AUTO }
+  const profiles = wgEndpoints(cfg).map((e) => {
+    const peer = e.peers?.[0]
+    // The private key is never returned.
+    return {
+      tag: e.tag,
+      name: wgName(e.tag),
+      enabled: isEnabled(e.tag),
+      address: e.address,
+      peer: peer ? `${peer.address}:${peer.port}` : null,
+      publicKey: peer?.public_key ?? null,
+      allowedIps: peer?.allowed_ips ?? [],
+      keepalive: peer?.persistent_keepalive_interval ?? null,
+      presharedKey: Boolean(peer?.pre_shared_key),
+    }
+  })
+  const active = activeTarget(cfg)
+  return { profiles, active, enabled: active !== null }
 }
 
 // ── Auth: one shared password, sessions held in memory. Restarting the service
@@ -395,13 +377,13 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
 
     const { endpoint } = parseWireguard(String(req.body?.config ?? ''))
-    endpoint.tag = `${WG_PREFIX}-${slug(name)}`
+    endpoint.tag = `${WG_ON}-${slug(name)}`
 
     const cfg = readConfig()
     cfg.endpoints = [...(cfg.endpoints ?? []).filter((e) => e.tag !== endpoint.tag), endpoint]
 
     // Rebuild routing from the resulting order, keeping the current mode.
-    applyRouting(cfg, activeTarget(cfg) === WG_AUTO)
+    applyRouting(cfg, activeTarget(cfg) !== null)
 
     await commit(cfg)
     res.json({ ok: true, tag: endpoint.tag })
@@ -420,7 +402,7 @@ app.post('/api/wireguard/order', requireAuth, async (req, res) => {
 
     const others = (cfg.endpoints ?? []).filter((e) => !isWgTag(e.tag))
     cfg.endpoints = [...others, ...tags.map((t) => wgs.find((e) => e.tag === t)!)]
-    applyRouting(cfg, activeTarget(cfg) === WG_AUTO)
+    applyRouting(cfg, activeTarget(cfg) !== null)
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
@@ -428,15 +410,31 @@ app.post('/api/wireguard/order', requireAuth, async (req, res) => {
   }
 })
 
-app.post('/api/wireguard/failover', requireAuth, async (req, res) => {
+app.post('/api/wireguard/enabled', requireAuth, async (req, res) => {
   try {
     const cfg = readConfig()
-    const enabled = Boolean(req.body?.enabled)
-    if (enabled && wgEndpoints(cfg).length < 2)
-      return res.status(400).json({ error: 'la bascule automatique demande au moins deux profils' })
-    applyRouting(cfg, enabled)
+    const on = Boolean(req.body?.enabled)
+    if (on && !wgEndpoints(cfg).some((e) => isEnabled(e.tag)))
+      return res.status(400).json({ error: 'aucun tunnel actif a utiliser' })
+    applyRouting(cfg, on)
     await commit(cfg)
     res.json({ ok: true })
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+
+app.post('/api/wireguard/:tag/enabled', requireAuth, async (req, res) => {
+  try {
+    const cfg = readConfig()
+    const ep = (cfg.endpoints ?? []).find((e) => e.tag === req.params.tag)
+    if (!ep) return res.status(404).json({ error: 'tunnel introuvable' })
+
+    const wasOn = activeTarget(cfg) !== null
+    ep.tag = withState(ep.tag, Boolean(req.body?.enabled))
+    applyRouting(cfg, wasOn)
+    await commit(cfg)
+    res.json({ ok: true, tag: ep.tag })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
   }
@@ -449,11 +447,11 @@ app.delete('/api/wireguard/:tag', requireAuth, async (req, res) => {
     if (!cfg.endpoints?.some((e) => e.tag === tag))
       return res.status(404).json({ error: 'profil introuvable' })
 
-    const wasAuto = activeTarget(cfg) === WG_AUTO
+    const wasOn = activeTarget(cfg) !== null
     cfg.endpoints = cfg.endpoints.filter((e) => e.tag !== tag)
     // Routing is rebuilt from what remains: a rule pointing at a deleted
     // endpoint is rejected by sing-box outright.
-    applyRouting(cfg, wasAuto)
+    applyRouting(cfg, wasOn)
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {

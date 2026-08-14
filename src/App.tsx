@@ -11,6 +11,7 @@ import {
   IconButton,
   Modal,
   Row,
+  Switch,
   TextButton,
   TonalButton,
 } from './ui'
@@ -19,6 +20,7 @@ export type User = { uuid: string; name?: string; link: string; qr: string }
 export type Profile = {
   tag: string
   name: string
+  enabled: boolean
   address: string[]
   peer: string | null
   publicKey: string | null
@@ -29,7 +31,7 @@ export type Profile = {
 export type Wireguard = {
   profiles: Profile[]
   active: string | null
-  failover: boolean
+  enabled: boolean
 }
 export type State = {
   authed: boolean
@@ -350,7 +352,8 @@ function WireguardTab({
   const [formError, setFormError] = useState('')
 
   const profiles = wg?.profiles ?? []
-  const failover = Boolean(wg?.failover)
+  const on = Boolean(wg?.enabled)
+  const firstEnabled = profiles.find((p) => p.enabled)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -377,57 +380,57 @@ function WireguardTab({
   return (
     <>
       <Card className="mb-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-xl leading-7 font-normal">Sortie du trafic</h2>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-56 flex-1">
+            <h2 className="text-xl leading-7 font-normal">Sortie par un tunnel</h2>
             <p className="mt-1 text-sm text-on-surface-variant">
-              {profiles.length
-                ? 'Le premier tunnel de la liste est utilisé. Réordonnez pour changer.'
-                : 'Sans tunnel, le trafic sort directement par cette machine.'}
+              {on && firstEnabled ? (
+                <>
+                  Le trafic ressort par <strong className="text-on-surface">{firstEnabled.name}</strong>, le
+                  premier tunnel actif de la liste.
+                </>
+              ) : (
+                'Le trafic ressort directement par cette machine.'
+              )}
             </p>
           </div>
-          <TonalButton onClick={() => { setFormError(''); setAdding(true) }}>
-            <Plus /> Ajouter
-          </TonalButton>
+          <Switch
+            label="Sortie par un tunnel"
+            checked={on}
+            disabled={busy || (!on && !firstEnabled)}
+            onChange={(v) =>
+              void act(() =>
+                api('/api/wireguard/enabled', { method: 'POST', body: JSON.stringify({ enabled: v }) }),
+              )
+            }
+          />
         </div>
-
-        {profiles.length > 1 && (
-          <label className="mt-5 flex items-start gap-3 rounded-[var(--radius-md3-m)] bg-surface-low p-4">
-            <input
-              type="checkbox"
-              checked={failover}
-              disabled={busy}
-              onChange={(e) =>
-                void act(() =>
-                  api('/api/wireguard/failover', {
-                    method: 'POST',
-                    body: JSON.stringify({ enabled: e.target.checked }),
-                  }),
-                )
-              }
-              className="mt-1 size-4 accent-[var(--color-primary)]"
-            />
-            <span className="text-sm">
-              <span className="font-medium">Basculer automatiquement si le tunnel ne répond plus</span>
-              <span className="block text-on-surface-variant">
-                sing-box teste tous les tunnels et utilise celui qui répond le plus vite. L’ordre de la liste
-                n’est alors plus suivi — il ne sert qu’en mode manuel.
-              </span>
-            </span>
-          </label>
+        {!on && !firstEnabled && profiles.length > 0 && (
+          <p className="mt-4 text-xs text-on-surface-variant">
+            Activez au moins un tunnel ci-dessous pour pouvoir enclencher la sortie.
+          </p>
         )}
       </Card>
+
+      <div className="mb-3 flex items-center justify-between px-1">
+        <h2 className="text-sm font-medium tracking-wide text-on-surface-variant uppercase">
+          Tunnels · {profiles.length}
+        </h2>
+        <TonalButton onClick={() => { setFormError(''); setAdding(true) }}>
+          <Plus /> Ajouter
+        </TonalButton>
+      </div>
 
       {profiles.length ? (
         <ul className="flex flex-col gap-4">
           {profiles.map((p, i) => {
-            const serving = failover || i === 0
+            const serving = on && firstEnabled?.tag === p.tag
             return (
               <li
                 key={p.tag}
                 className={`rounded-[var(--radius-md3-xl)] p-5 ${
                   serving ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container'
-                }`}
+                } ${p.enabled ? '' : 'opacity-60'}`}
               >
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
@@ -435,8 +438,8 @@ function WireguardTab({
                       {i + 1}
                     </span>
                     <p className="text-lg leading-6 font-medium">{p.name}</p>
-                    {!failover && i === 0 && <Chip tone="ok">actif</Chip>}
-                    {failover && <Chip tone="ok">candidat</Chip>}
+                    {serving && <Chip tone="ok">en service</Chip>}
+                    {!p.enabled && <Chip>désactivé</Chip>}
                   </div>
                   <div className="flex items-center gap-1">
                     <IconButton label="Monter" onClick={() => move(i, i - 1)}>
@@ -448,6 +451,19 @@ function WireguardTab({
                     <TextButton tone="error" onClick={() => setPending(p)}>
                       Supprimer
                     </TextButton>
+                    <Switch
+                      label={`Activer ${p.name}`}
+                      checked={p.enabled}
+                      disabled={busy}
+                      onChange={(v) =>
+                        void act(() =>
+                          api(`/api/wireguard/${p.tag}/enabled`, {
+                            method: 'POST',
+                            body: JSON.stringify({ enabled: v }),
+                          }),
+                        )
+                      }
+                    />
                   </div>
                 </div>
                 <table className="w-full text-sm">
@@ -499,10 +515,10 @@ function WireguardTab({
             <>
               Le tunnel <strong className="text-on-surface">{pending.name}</strong> et sa clé privée seront
               retirés de la configuration.
-              {profiles[0]?.tag === pending.tag && !failover && (
+              {firstEnabled?.tag === pending.tag && on && (
                 <span className="mt-2 block">
-                  C’est celui en service : le trafic passera au suivant de la liste, ou ressortira directement
-                  par cette machine s’il n’en reste aucun.
+                  C’est celui en service : le trafic passera au tunnel actif suivant, ou ressortira
+                  directement par cette machine s’il n’en reste aucun.
                 </span>
               )}
             </>

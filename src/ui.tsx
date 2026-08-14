@@ -280,3 +280,42 @@ export function ConfirmModal({
     </Modal>
   )
 }
+
+/** Material 3 switch: the thumb grows when on, which reads at a glance. */
+export function Switch({
+  checked,
+  disabled,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  disabled?: boolean
+  onChange: (v: boolean) => void
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-8 w-13 shrink-0 items-center rounded-full border-2 transition-colors disabled:opacity-38 ${
+        checked ? 'border-primary bg-primary' : 'border-outline bg-surface-highest'
+      }`}
+    >
+      <span
+        className={`grid place-items-center rounded-full transition-all ${
+          checked
+            ? 'ml-[26px] size-6 bg-on-primary text-primary'
+            : 'ml-1 size-4 bg-outline text-transparent'
+        }`}
+      >
+        <svg viewBox="0 0 24 24" className="size-4 fill-current" aria-hidden>
+          <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+        </svg>
+      </span>
+    </button>
+  )
+}
