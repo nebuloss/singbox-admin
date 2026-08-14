@@ -33,9 +33,11 @@ deployment. Set it under Settings; leave it empty and it is inferred from how
 you reached the interface, which is right on a first visit and wrong as soon as
 the interface lives on an internal name a phone cannot resolve.
 
-On that public name, publish the tunnel and the `/sub/` path. Do not publish
-the admin interface: it is one shared password with no audit trail, and its
-place is the internal name.
+On that public name, publish the rule the interface generates under Settings.
+It names no path: a WebSocket upgrade is the tunnel, anything else is the app's
+public listener, which serves a profile or a plain not-found page and nothing
+else. Do not publish the admin interface: it is one shared password with no
+audit trail, and its place is the internal name.
 
 There are two different ways to take access away:
 

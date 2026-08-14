@@ -1134,7 +1134,7 @@ function PublicUrlModal({
         error={malformed ? t('Attendu : https://nom.example.com') : undefined}
       />
       <p className="text-xs text-on-surface-variant">
-        {t('Laissez vide pour déduire l’adresse de votre accès à cette interface. Sur ce nom, publiez le tunnel et le chemin /sub/ : l’interface d’administration, elle, n’a rien à faire sur Internet.')}
+        {t('Laissez vide pour déduire l’adresse de votre accès à cette interface. Sur ce nom, publiez la règle donnée plus bas : l’interface d’administration, elle, n’a rien à faire sur Internet.')}
       </p>
     </FormModal>
   )

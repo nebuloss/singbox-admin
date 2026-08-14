@@ -126,8 +126,8 @@ const EN: Record<string, string> = {
   'Une seule adresse pour tout : c’est là que les appareils se connectent au tunnel et qu’ils vont chercher leur profil. Elle doit être joignable depuis eux.':
     'One address for everything: it is where devices connect to the tunnel and where they fetch their profile. It has to be reachable from them.',
   'Attendu : https://nom.example.com': 'Expected: https://name.example.com',
-  'Laissez vide pour déduire l’adresse de votre accès à cette interface. Sur ce nom, publiez le tunnel et le chemin /sub/ : l’interface d’administration, elle, n’a rien à faire sur Internet.':
-    'Leave empty to infer it from how you reached this interface. On that name, publish the tunnel and the /sub/ path: the admin interface itself has no business on the internet.',
+  'Laissez vide pour déduire l’adresse de votre accès à cette interface. Sur ce nom, publiez la règle donnée plus bas : l’interface d’administration, elle, n’a rien à faire sur Internet.':
+    'Leave empty to infer it from how you reached this interface. On that name, publish the rule given below: the admin interface itself has no business on the internet.',
   'adresse invalide': 'invalid address',
   'Chemin WebSocket': 'WebSocket path',
   Régénérer: 'Regenerate',
