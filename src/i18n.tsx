@@ -42,6 +42,10 @@ const EN: Record<string, string> = {
   'sans nom': 'unnamed',
   Révoquer: 'Revoke',
   'Révoquer cet appareil ?': 'Revoke this device?',
+  'Le lien reste valide, mais aucun trafic ne passe tant qu’il est désactivé.':
+    'The link stays valid, but no traffic passes while it is disabled.',
+  'Un appareil sans nom ne peut pas être désactivé.':
+    'A device without a name cannot be disabled.',
   'Copier le lien': 'Copy the link',
   Copié: 'Copied',
 
@@ -146,6 +150,7 @@ const EN: Record<string, string> = {
   'identique a l actuel': 'same as the current one',
   'nom invalide': 'invalid name',
   'ce nom existe deja': 'that name already exists',
+  'un appareil sans nom ne peut pas etre desactive': 'a device without a name cannot be disabled',
   inconnu: 'unknown',
   'refus : cela supprimerait le dernier acces': 'refused: that would remove the last way in',
   'un tunnel porte deja ce nom': 'a tunnel already has that name',

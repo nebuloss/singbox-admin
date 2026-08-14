@@ -18,7 +18,7 @@ import {
   TonalButton,
 } from './ui'
 
-export type User = { uuid: string; name?: string; link: string; qr: string }
+export type User = { uuid: string; name?: string; link: string; qr: string; enabled: boolean }
 export type Profile = {
   tag: string
   name: string
@@ -262,7 +262,20 @@ function DevicesTab({
       {state.users?.length ? (
         <ul className="flex flex-col gap-4">
           {state.users.map((u) => (
-            <UserCard key={u.uuid} user={u} onRevoke={() => setPending(u)} />
+            <UserCard
+              key={u.uuid}
+              user={u}
+              busy={busy}
+              onRevoke={() => setPending(u)}
+              onToggle={(v) =>
+                void act(() =>
+                  api(`/api/users/${u.uuid}/enabled`, {
+                    method: 'POST',
+                    body: JSON.stringify({ enabled: v }),
+                  }),
+                )
+              }
+            />
           ))}
         </ul>
       ) : (
@@ -292,11 +305,25 @@ function DevicesTab({
   )
 }
 
-function UserCard({ user, onRevoke }: { user: User; onRevoke: () => void }) {
+function UserCard({
+  user,
+  busy,
+  onToggle,
+  onRevoke,
+}: {
+  user: User
+  busy: boolean
+  onToggle: (v: boolean) => void
+  onRevoke: () => void
+}) {
   const t = useT()
   const [copied, setCopied] = useState(false)
   return (
-    <li className="overflow-hidden rounded-[var(--radius-md3-xl)] bg-surface-container">
+    <li
+      className={`overflow-hidden rounded-[var(--radius-md3-xl)] bg-surface-container transition-opacity ${
+        user.enabled ? '' : 'opacity-60'
+      }`}
+    >
       <div className="flex flex-col gap-5 p-5 sm:flex-row">
         <div className="mx-auto size-32 shrink-0 rounded-[var(--radius-md3-m)] bg-white p-2 sm:mx-0 [&>div>svg]:size-full">
           <div dangerouslySetInnerHTML={{ __html: user.qr }} />
@@ -304,13 +331,31 @@ function UserCard({ user, onRevoke }: { user: User; onRevoke: () => void }) {
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="truncate text-lg leading-6 font-medium">{user.name ?? t('sans nom')}</p>
+              <div className="flex items-center gap-2">
+                <p className="truncate text-lg leading-6 font-medium">{user.name ?? t('sans nom')}</p>
+                {!user.enabled && <Chip>{t('désactivé')}</Chip>}
+              </div>
               <p className="mt-0.5 font-mono text-xs text-on-surface-variant">{user.uuid.slice(0, 13)}…</p>
             </div>
-            <TextButton tone="error" onClick={onRevoke}>
-              {t('Révoquer')}
-            </TextButton>
+            <div className="flex shrink-0 items-center gap-1">
+              <IconButton label={t('Révoquer')} tone="error" onClick={onRevoke}>
+                <path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+              </IconButton>
+              <Switch
+                label={`${t('Activer')} ${user.name ?? user.uuid.slice(0, 8)}`}
+                title={user.name ? undefined : t('Un appareil sans nom ne peut pas être désactivé.')}
+                checked={user.enabled}
+                disabled={busy || !user.name}
+                onChange={onToggle}
+              />
+            </div>
           </div>
+
+          {!user.enabled && (
+            <p className="text-xs text-on-surface-variant">
+              {t('Le lien reste valide, mais aucun trafic ne passe tant qu’il est désactivé.')}
+            </p>
+          )}
           <textarea
             readOnly
             rows={3}

@@ -52,7 +52,7 @@ type Peer = {
   persistent_keepalive_interval?: number
 }
 type Endpoint = { type: string; tag: string; address: string[]; private_key: string; peers: Peer[] }
-type Rule = { ip_cidr?: string[]; outbound?: string }
+type Rule = { ip_cidr?: string[]; outbound?: string; auth_user?: string[]; action?: string }
 type Config = {
   inbounds?: Inbound[]
   endpoints?: Endpoint[]
@@ -215,6 +215,31 @@ function applyRouting(cfg: Config, on: boolean) {
   cfg.route.rules.push({ ip_cidr: first.peers?.[0]?.allowed_ips ?? [], outbound: first.tag })
 }
 
+/**
+ * Disabling a device cannot be written on the user object — sing-box rejects
+ * unknown keys there, exactly as it does on endpoints. It lives in routing
+ * instead: a single rule rejecting every disabled name, kept first so it wins
+ * over the tunnel rule below it.
+ *
+ * The matcher is `auth_user`, the authenticated inbound user. Do not reach for
+ * `user`: it passes `sing-box check` but means the OS process owner, so the
+ * rule silently matches nothing and the device stays online.
+ *
+ * A disabled device still authenticates and its link stays valid — nothing
+ * leaves, that is all. Revoking, which drops the UUID, is the hard cut.
+ */
+const isRejectRule = (r: Rule) => r.action === 'reject' && Array.isArray(r.auth_user)
+
+function disabledUsers(cfg: Config): Set<string> {
+  return new Set(cfg.route?.rules?.find(isRejectRule)?.auth_user ?? [])
+}
+
+function applyUserRules(cfg: Config, disabled: Set<string>) {
+  cfg.route = cfg.route ?? {}
+  cfg.route.rules = (cfg.route.rules ?? []).filter((r) => !isRejectRule(r))
+  if (disabled.size) cfg.route.rules.unshift({ auth_user: [...disabled], action: 'reject' })
+}
+
 function wireguardSummary(cfg: Config) {
   const profiles = wgEndpoints(cfg).map((e) => {
     const peer = e.peers?.[0]
@@ -321,10 +346,16 @@ app.get('/api/state', async (req, res) => {
     const version = (await run('sing-box', ['version'])).out.split('\n')[0] ?? ''
     const status = await run('rc-service', [SERVICE, 'status'])
 
+    const disabled = disabledUsers(cfg)
     const users = await Promise.all(
       (inbound.users ?? []).map(async (u) => {
         const link = linkFor(u, wsPath)
-        return { ...u, link, qr: await QRCode.toString(link, { type: 'svg', margin: 1 }) }
+        return {
+          ...u,
+          link,
+          enabled: !(u.name && disabled.has(u.name)),
+          qr: await QRCode.toString(link, { type: 'svg', margin: 1 }),
+        }
       }),
     )
     res.json({
@@ -348,6 +379,10 @@ app.post('/api/users', requireAuth, async (req, res) => {
     if (inbound.users!.some((u) => u.name === name))
       return res.status(409).json({ error: 'ce nom existe deja' })
     inbound.users!.push({ uuid: crypto.randomUUID(), name })
+    // A leftover rejection under the same name would make the new device dead
+    // on arrival, with nothing in the interface explaining why.
+    const disabled = disabledUsers(cfg)
+    if (disabled.delete(name)) applyUserRules(cfg, disabled)
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
@@ -359,15 +394,41 @@ app.delete('/api/users/:uuid', requireAuth, async (req, res) => {
   try {
     const cfg = readConfig()
     const inbound = vlessInbound(cfg)
-    const before = inbound.users!.length
+    const gone = inbound.users!.find((u) => u.uuid === req.params.uuid)
+    if (!gone) return res.status(404).json({ error: 'inconnu' })
     inbound.users = inbound.users!.filter((u) => u.uuid !== req.params.uuid)
-    if (inbound.users.length === before) return res.status(404).json({ error: 'inconnu' })
     if (inbound.users.length === 0)
       return res.status(400).json({ error: 'refus : cela supprimerait le dernier acces' })
+
+    // Drop any rejection it left behind, so the name comes back clean.
+    const disabled = disabledUsers(cfg)
+    if (gone.name && disabled.delete(gone.name)) applyUserRules(cfg, disabled)
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
+  }
+})
+
+app.post('/api/users/:uuid/enabled', requireAuth, async (req, res) => {
+  try {
+    const cfg = readConfig()
+    const user = vlessInbound(cfg).users!.find((u) => u.uuid === req.params.uuid)
+    if (!user) return res.status(404).json({ error: 'inconnu' })
+    // Rejection matches on the name, so there is nothing to match on without
+    // one. Every device the interface creates has a name; a nameless one can
+    // only come from a hand-edited config.
+    if (!user.name)
+      return res.status(400).json({ error: 'un appareil sans nom ne peut pas etre desactive' })
+
+    const disabled = disabledUsers(cfg)
+    if (req.body?.enabled) disabled.delete(user.name)
+    else disabled.add(user.name)
+    applyUserRules(cfg, disabled)
+    await commit(cfg)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
   }
 })
 

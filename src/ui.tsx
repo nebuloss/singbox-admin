@@ -122,10 +122,12 @@ export function IconButton({
   children,
   label,
   onClick,
+  tone,
 }: {
   children: React.ReactNode
   label: string
   onClick?: () => void
+  tone?: 'error'
 }) {
   return (
     <button
@@ -133,7 +135,9 @@ export function IconButton({
       onClick={onClick}
       aria-label={label}
       title={label}
-      className="state-layer grid size-10 shrink-0 place-items-center rounded-[var(--radius-md3-full)] text-on-surface-variant"
+      className={`state-layer grid size-10 shrink-0 place-items-center rounded-[var(--radius-md3-full)] ${
+        tone === 'error' ? 'text-error' : 'text-on-surface-variant'
+      }`}
     >
       <svg viewBox="0 0 24 24" className="size-6 fill-current" aria-hidden>
         {children}
@@ -290,11 +294,14 @@ export function Switch({
   disabled,
   onChange,
   label,
+  title,
 }: {
   checked: boolean
   disabled?: boolean
   onChange: (v: boolean) => void
   label: string
+  /** Why the switch is greyed out, when that is not obvious from context. */
+  title?: string
 }) {
   return (
     <button
@@ -302,6 +309,7 @@ export function Switch({
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      title={title}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={`relative inline-flex h-8 w-13 shrink-0 items-center rounded-full border-2 transition-colors disabled:opacity-38 ${
