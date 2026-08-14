@@ -28,6 +28,7 @@ export type Profile = {
   publicKey: string | null
   allowedIps: string[]
   keepalive: number | null
+  dns: string | null
   presharedKey: boolean
 }
 export type Wireguard = {
@@ -646,6 +647,7 @@ function WireguardTab({
                     <Row label={t('Adresse dans le tunnel')}>{p.address.join(', ')}</Row>
                     <Row label={t('Réseaux routés')}>{p.allowedIps.join(', ')}</Row>
                     <Row label={t('Keepalive')}>{p.keepalive ? `${p.keepalive} s` : '—'}</Row>
+                    <Row label={t('DNS')}>{p.dns ?? '—'}</Row>
                   </tbody>
                 </table>
               </li>
@@ -765,6 +767,7 @@ function EditTunnelModal({
   const [address, setAddress] = useState(profile.address.join(', '))
   const [allowedIps, setAllowedIps] = useState(profile.allowedIps.join(', '))
   const [keepalive, setKeepalive] = useState(String(profile.keepalive ?? 25))
+  const [dns, setDns] = useState(profile.dns ?? '')
 
   const clash = nameClash(names, name, profile.name)
   // The card shows the peer as host:port, so the form takes it back the same
@@ -789,6 +792,7 @@ function EditTunnelModal({
             address,
             allowedIps,
             keepalive: Number(keepalive),
+            dns: dns.trim(),
           }),
         })
         await act(async () => {})
@@ -806,6 +810,10 @@ function EditTunnelModal({
       <Field label={t('Adresse dans le tunnel')} value={address} onChange={setAddress} />
       <Field label={t('Réseaux routés')} value={allowedIps} onChange={setAllowedIps} />
       <Field label={t('Keepalive')} value={keepalive} onChange={setKeepalive} />
+      <Field label={t('DNS')} value={dns} onChange={setDns} />
+      <p className="text-xs text-on-surface-variant">
+        {t('Le DNS est celui de la ligne « DNS » de la configuration WireGuard : c’est lui qui résout les noms internes, et il est interrogé à travers ce tunnel.')}
+      </p>
       <p className="text-xs text-on-surface-variant">
         {t('La clé privée n’est pas modifiée. Pour en changer, supprimez le tunnel et recréez-le.')}
       </p>

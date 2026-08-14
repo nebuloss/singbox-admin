@@ -70,12 +70,13 @@ type Peer = {
 }
 type Endpoint = { type: string; tag: string; address: string[]; private_key: string; peers: Peer[] }
 type Rule = { ip_cidr?: string[]; outbound?: string }
+type DnsServer = { type?: string; tag?: string; server?: string; detour?: string }
 type Config = {
   inbounds?: Inbound[]
   endpoints?: Endpoint[]
   outbounds?: unknown[]
-  dns?: { servers?: unknown[]; [k: string]: unknown }
-  route?: { rules?: Rule[]; final?: string; [k: string]: unknown }
+  dns?: { servers?: DnsServer[]; rules?: unknown[]; final?: string; [k: string]: unknown }
+  route?: { rules?: Rule[]; final?: string; default_domain_resolver?: { server?: string }; [k: string]: unknown }
 }
 
 // sing-box rejects unknown keys, so a disabled tunnel cannot carry an
@@ -188,7 +189,7 @@ function linkFor(user: User, name: string | undefined, wsPath: string): string {
  * provider hands you — into a sing-box endpoint. Accepting that format
  * directly avoids retyping five fields and getting one wrong.
  */
-function parseWireguard(text: string): { endpoint: Endpoint; allowedIps: string[] } {
+function parseWireguard(text: string): { endpoint: Endpoint; allowedIps: string[]; dns: string | null } {
   const get = (section: string, key: string): string | undefined => {
     const re = new RegExp(`\\[${section}\\]([\\s\\S]*?)(?=\\n\\s*\\[|$)`, 'i')
     const body = re.exec(text)?.[1] ?? ''
@@ -202,6 +203,8 @@ function parseWireguard(text: string): { endpoint: Endpoint; allowedIps: string[
   const endpointLine = get('Peer', 'Endpoint')
   const allowed = get('Peer', 'AllowedIPs') ?? '0.0.0.0/0'
   const psk = get('Peer', 'PresharedKey')
+  // The router names its own resolver; that is what makes internal names work.
+  const dns = get('Interface', 'DNS')
   const keepalive = get('Peer', 'PersistentKeepalive')
 
   if (!privateKey) throw new Error('PrivateKey manquant dans [Interface]')
@@ -237,6 +240,7 @@ function parseWireguard(text: string): { endpoint: Endpoint; allowedIps: string[
       peers: [peer],
     },
     allowedIps,
+    dns: dns?.split(',')[0].trim() || null,
   }
 }
 
@@ -313,6 +317,60 @@ function applyRouting(cfg: Config, on: boolean) {
   cfg.route.rules.push({ ip_cidr: first.peers?.[0]?.allowed_ips ?? [], outbound: first.tag })
 }
 
+/**
+ * DNS follows the tunnel.
+ *
+ * A WireGuard configuration names the resolver to use — that DNS line is what
+ * makes internal names resolve at all — so each tunnel carries its own server
+ * entry, reached through that tunnel. Whichever tunnel is serving lends its
+ * resolver to `default_domain_resolver`, and with the outbound off we fall back
+ * to the public one rather than pointing at something unreachable.
+ *
+ * That last knob is the one that matters: sing-box resolves a domain arriving
+ * through the tunnel with it and does NOT consult `dns.rules` on the way — a
+ * rule there looks right and decides nothing.
+ */
+const DNS_PREFIX = 'dns-wg-'
+const dnsTag = (id: string) => `${DNS_PREFIX}${id}`
+const isOurDns = (tag?: string) => Boolean(tag?.startsWith(DNS_PREFIX))
+const dnsIdOf = (tag: string) => tag.slice(DNS_PREFIX.length)
+
+const dnsFor = (cfg: Config, ep: Endpoint) =>
+  (cfg.dns?.servers ?? []).find((d) => d.tag === dnsTag(wgId(ep.tag)))
+
+/** Point a tunnel at a resolver, or drop the entry when the address is cleared. */
+function setTunnelDns(cfg: Config, ep: Endpoint, server: string | null) {
+  cfg.dns = cfg.dns ?? {}
+  cfg.dns.servers = cfg.dns.servers ?? []
+  const tag = dnsTag(wgId(ep.tag))
+  cfg.dns.servers = cfg.dns.servers.filter((d) => d.tag !== tag)
+  if (server) cfg.dns.servers.push({ type: 'udp', tag, server, detour: ep.tag })
+}
+
+function applyDns(cfg: Config, on: boolean) {
+  cfg.dns = cfg.dns ?? {}
+  cfg.route = cfg.route ?? {}
+  const servers = cfg.dns.servers ?? []
+  const live = wgEndpoints(cfg)
+
+  // Ours only survive as long as their tunnel does, and their detour follows
+  // the tag when a tunnel is switched on or off.
+  cfg.dns.servers = servers.filter(
+    (d) => !isOurDns(d.tag) || live.some((e) => wgId(e.tag) === dnsIdOf(d.tag!)),
+  )
+  for (const d of cfg.dns.servers) {
+    if (!isOurDns(d.tag)) continue
+    const ep = live.find((e) => wgId(e.tag) === dnsIdOf(d.tag!))
+    if (ep) d.detour = ep.tag
+  }
+
+  const serving = on ? live.find((e) => isEnabled(e.tag)) : undefined
+  const ours = serving ? dnsFor(cfg, serving) : undefined
+  const fallback = cfg.dns.servers.find((d) => !isOurDns(d.tag))?.tag
+  const chosen = ours?.tag ?? fallback
+  if (chosen) cfg.route.default_domain_resolver = { server: chosen }
+}
+
 function wireguardSummary(cfg: Config, names: Names) {
   const profiles = wgEndpoints(cfg).map((e) => {
     const peer = e.peers?.[0]
@@ -326,6 +384,7 @@ function wireguardSummary(cfg: Config, names: Names) {
       publicKey: peer?.public_key ?? null,
       allowedIps: peer?.allowed_ips ?? [],
       keepalive: peer?.persistent_keepalive_interval ?? null,
+      dns: dnsFor(cfg, e)?.server ?? null,
       presharedKey: Boolean(peer?.pre_shared_key),
     }
   })
@@ -581,7 +640,7 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
 
     const names = readAdminConfig(ADMIN_CONFIG).names
-    const { endpoint } = parseWireguard(String(req.body?.config ?? ''))
+    const { endpoint, dns } = parseWireguard(String(req.body?.config ?? ''))
     endpoint.tag = `${WG_ON}-${newWgId()}`
 
     const cfg = readConfig()
@@ -607,9 +666,12 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
       })
 
     cfg.endpoints = [...(cfg.endpoints ?? []), endpoint]
+    // The DNS line of the pasted configuration, if it had one.
+    setTunnelDns(cfg, endpoint, dns)
 
     // Rebuild routing from the resulting order, keeping the current mode.
     applyRouting(cfg, activeTarget(cfg) !== null)
+    applyDns(cfg, activeTarget(cfg) !== null)
 
     await commit(cfg)
     updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [wgKey(endpoint.tag)]: name } }))
@@ -661,13 +723,14 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
         error: `ce tunnel est deja configure sous le nom : ${names[wgKey(clash.tag)] ?? wgId(clash.tag)}`,
       })
 
+    const dns = String(req.body?.dns ?? '').trim()
     const keepalive = Number(req.body?.keepalive)
     const peer = ep.peers?.[0]
     if (!peer) return res.status(400).json({ error: 'tunnel sans pair' })
 
     // The tag holds a permanent id, so nothing here renames it. Only the peer
-    // fields can change, and only those are worth a write.
-    const before = JSON.stringify([ep.address, peer])
+    // fields and the resolver can change, and only those are worth a write.
+    const before = JSON.stringify([ep.address, peer, dnsFor(cfg, ep)?.server ?? null])
     ep.address = address
     peer.address = host
     peer.port = port
@@ -675,9 +738,11 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
     peer.allowed_ips = allowedIps
     peer.persistent_keepalive_interval = Number.isInteger(keepalive) && keepalive > 0 ? keepalive : 25
 
-    if (JSON.stringify([ep.address, peer]) !== before) {
+    setTunnelDns(cfg, ep, dns || null)
+    if (JSON.stringify([ep.address, peer, dns || null]) !== before) {
       // AllowedIPs feeds the routing rule, so rebuild it, keeping the mode.
       applyRouting(cfg, activeTarget(cfg) !== null)
+      applyDns(cfg, activeTarget(cfg) !== null)
       await commit(cfg)
     }
     updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [wgKey(ep.tag)]: name } }))
@@ -698,6 +763,7 @@ app.post('/api/wireguard/order', requireAuth, async (req, res) => {
     const others = (cfg.endpoints ?? []).filter((e) => !isWgTag(e.tag))
     cfg.endpoints = [...others, ...tags.map((t) => wgs.find((e) => e.tag === t)!)]
     applyRouting(cfg, activeTarget(cfg) !== null)
+    applyDns(cfg, activeTarget(cfg) !== null)
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
@@ -712,6 +778,7 @@ app.post('/api/wireguard/enabled', requireAuth, async (req, res) => {
     if (on && !wgEndpoints(cfg).some((e) => isEnabled(e.tag)))
       return res.status(400).json({ error: 'aucun tunnel actif a utiliser' })
     applyRouting(cfg, on)
+    applyDns(cfg, on)
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
@@ -732,6 +799,7 @@ app.post('/api/wireguard/:tag/enabled', requireAuth, async (req, res) => {
     // resolving through the tunnel. The id — and so the name — is untouched.
     retag(cfg, before, ep.tag)
     applyRouting(cfg, wasOn)
+    applyDns(cfg, wasOn)
     await commit(cfg)
     res.json({ ok: true, tag: ep.tag })
   } catch (e) {
@@ -751,6 +819,7 @@ app.delete('/api/wireguard/:tag', requireAuth, async (req, res) => {
     // Routing is rebuilt from what remains: a rule pointing at a deleted
     // endpoint is rejected by sing-box outright.
     applyRouting(cfg, wasOn)
+    applyDns(cfg, wasOn)
     await commit(cfg)
     updateAdminConfig(ADMIN_CONFIG, (s) => {
       const { [wgKey(tag)]: _gone, ...rest } = s.names

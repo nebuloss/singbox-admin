@@ -81,6 +81,9 @@ const EN: Record<string, string> = {
   'Adresse dans le tunnel': 'Address inside the tunnel',
   'Réseaux routés': 'Routed networks',
   Keepalive: 'Keepalive',
+  DNS: 'DNS',
+  'Le DNS est celui de la ligne « DNS » de la configuration WireGuard : c’est lui qui résout les noms internes, et il est interrogé à travers ce tunnel.':
+    'The DNS is the one from the WireGuard configuration’s DNS line: it is what resolves internal names, and it is queried through this tunnel.',
 
   // Applications
   'Applications clientes': 'Client applications',
