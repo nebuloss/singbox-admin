@@ -290,6 +290,13 @@ function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase
  */
 function proxySnippet(cfg: Config, appPort: number): string {
   const singbox = liveInbound(cfg).listen_port ?? 8081
+  // The address the proxy has to dial. This process runs on the sing-box host,
+  // so its own LAN address is the right answer whether the proxy sits here or
+  // on another machine — which loopback would not be.
+  const host =
+    Object.values(os.networkInterfaces())
+      .flat()
+      .find((i) => i && i.family === 'IPv4' && !i.internal)?.address ?? '127.0.0.1'
   return [
     '# La racine est servie directement : autant lui epargner un aller-retour.',
     'location = / {',
@@ -299,7 +306,7 @@ function proxySnippet(cfg: Config, appPort: number): string {
     '',
     "# Le profil d'un appareil. Seul chemin qui va a l'interface, pas au tunnel.",
     `location ${SUB_PREFIX} {`,
-    `  proxy_pass http://127.0.0.1:${appPort};`,
+    `  proxy_pass http://${host}:${appPort};`,
     '  proxy_set_header Host $host;',
     '  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
     '  proxy_set_header X-Forwarded-Proto $scheme;',
@@ -311,7 +318,7 @@ function proxySnippet(cfg: Config, appPort: number): string {
     "# upgrade WebSocket. Le proxy n'a pas a connaitre ce chemin : les autres",
     '# cas sont rattrapes et rendus sous la page de couverture, en 200.',
     'location / {',
-    `  proxy_pass http://127.0.0.1:${singbox};`,
+    `  proxy_pass http://${host}:${singbox};`,
     '  proxy_set_header Host $host;',
     '  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
     '  proxy_set_header Upgrade $http_upgrade;',
