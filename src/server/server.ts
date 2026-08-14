@@ -855,6 +855,10 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
         error: `ce tunnel est deja configure sous le nom : ${names[wgKey(clash.tag)] ?? wgId(clash.tag)}`,
       })
 
+    // Absent means "leave it alone"; empty means "clear it". Treating the two
+    // alike let a request that never mentioned DNS wipe the tunnel's resolver,
+    // and with it the rule that routes internal names.
+    const dnsGiven = req.body?.dns !== undefined
     const dns = String(req.body?.dns ?? '').trim()
     const keepalive = Number(req.body?.keepalive)
     const peer = ep.peers?.[0]
@@ -862,7 +866,9 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
 
     // The tag holds a permanent id, so nothing here renames it. Only the peer
     // fields and the resolver can change, and only those are worth a write.
-    const before = JSON.stringify([ep.address, peer, dnsFor(cfg, ep)?.server ?? null])
+    const currentDns = dnsFor(cfg, ep)?.server ?? null
+    const nextDns = dnsGiven ? dns || null : currentDns
+    const before = JSON.stringify([ep.address, peer, currentDns])
     ep.address = address
     peer.address = host
     peer.port = port
@@ -872,8 +878,8 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
 
     // AllowedIPs and the resolver both feed what gets rebuilt, so a change to
     // either is worth a write — and nothing else is.
-    if (JSON.stringify([ep.address, peer, dns || null]) !== before) {
-      await withTunnels(cfg, () => setTunnelDns(cfg, ep, dns || null))
+    if (JSON.stringify([ep.address, peer, nextDns]) !== before) {
+      await withTunnels(cfg, () => setTunnelDns(cfg, ep, nextDns))
     }
     updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [wgKey(ep.tag)]: name } }))
     res.json({ ok: true, tag: ep.tag })
