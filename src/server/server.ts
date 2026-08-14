@@ -1171,7 +1171,10 @@ publicApp.listen(PUBLIC_PORT_LISTEN, () => {
  * credential is never retired, however quiet: a device may simply be asleep,
  * and it is the one thing that would lock it out for good.
  */
-let logOffset = 0
+// Start at the end of the log, not the beginning. Reading what is already
+// there would stamp connections from days ago as happening now, and nothing
+// would ever look idle enough to retire.
+let logOffset = -1
 
 function observeLog(): Record<string, string> {
   const seen: Record<string, string> = {}
@@ -1179,6 +1182,10 @@ function observeLog(): Record<string, string> {
     const path = readConfig().log?.output
     if (!path) return seen
     const size = fs.statSync(path).size
+    if (logOffset < 0) {
+      logOffset = size
+      return seen
+    }
     // Truncated or rotated: start over rather than read from beyond the end.
     if (size < logOffset) logOffset = 0
     if (size === logOffset) return seen
