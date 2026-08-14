@@ -229,6 +229,7 @@ function DevicesTab({
   const t = useT()
   const [newName, setNewName] = useState('')
   const [pending, setPending] = useState<User | null>(null)
+  const [renaming, setRenaming] = useState<User | null>(null)
 
   return (
     <>
@@ -266,6 +267,7 @@ function DevicesTab({
               key={u.uuid}
               user={u}
               busy={busy}
+              onRename={() => setRenaming(u)}
               onRevoke={() => setPending(u)}
               onToggle={(v) =>
                 void act(() =>
@@ -280,6 +282,14 @@ function DevicesTab({
         </ul>
       ) : (
         <Empty>{t('Aucun appareil déclaré.')}</Empty>
+      )}
+
+      {renaming && (
+        <RenameDeviceModal
+          user={renaming}
+          act={act}
+          onClose={() => setRenaming(null)}
+        />
       )}
 
       {pending && (
@@ -309,11 +319,13 @@ function UserCard({
   user,
   busy,
   onToggle,
+  onRename,
   onRevoke,
 }: {
   user: User
   busy: boolean
   onToggle: (v: boolean) => void
+  onRename: () => void
   onRevoke: () => void
 }) {
   const t = useT()
@@ -338,6 +350,9 @@ function UserCard({
               <p className="mt-0.5 font-mono text-xs text-on-surface-variant">{user.uuid.slice(0, 13)}…</p>
             </div>
             <div className="flex shrink-0 items-center gap-1">
+              <IconButton label={t('Renommer')} onClick={onRename}>
+                <Pencil />
+              </IconButton>
               <IconButton label={t('Révoquer')} tone="error" onClick={onRevoke}>
                 <path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
               </IconButton>
@@ -379,6 +394,57 @@ function UserCard({
   )
 }
 
+function RenameDeviceModal({
+  user,
+  act,
+  onClose,
+}: {
+  user: User
+  act: (fn: () => Promise<unknown>) => Promise<void>
+  onClose: () => void
+}) {
+  const t = useT()
+  const [name, setName] = useState(user.name ?? '')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setBusy(true)
+    try {
+      await api(`/api/users/${user.uuid}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: name.trim() }),
+      })
+      onClose()
+      await act(async () => {})
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title={t('Renommer l’appareil')} onClose={onClose}>
+      <form className="flex flex-col gap-4" onSubmit={submit}>
+        <Field label={t('Nom de l’appareil')} value={name} onChange={setName} autoFocus />
+        <p className="text-xs text-on-surface-variant">
+          {t('L’identifiant ne change pas : un appareil déjà connecté n’est pas coupé, seule l’étiquette portée par le lien change.')}
+        </p>
+        {error && <Banner tone="error">{t(error)}</Banner>}
+        <div className="flex justify-end gap-2">
+          <TextButton onClick={onClose}>{t('Annuler')}</TextButton>
+          <FilledButton disabled={busy || !name.trim() || name.trim() === user.name}>
+            {t('Enregistrer')}
+          </FilledButton>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
 /* ── WireGuard ───────────────────────────────────────────────────────────── */
 
 function WireguardTab({
@@ -393,6 +459,7 @@ function WireguardTab({
   const t = useT()
   const [adding, setAdding] = useState(false)
   const [pending, setPending] = useState<Profile | null>(null)
+  const [editing, setEditing] = useState<Profile | null>(null)
   const [name, setName] = useState('')
   const [conf, setConf] = useState('')
   const [formError, setFormError] = useState('')
@@ -538,9 +605,12 @@ function WireguardTab({
                         </IconButton>
                       </>
                     )}
-                    <TextButton tone="error" onClick={() => setPending(p)}>
-                      {t('Supprimer')}
-                    </TextButton>
+                    <IconButton label={t('Modifier')} onClick={() => setEditing(p)}>
+                      <Pencil />
+                    </IconButton>
+                    <IconButton label={t('Supprimer')} tone="error" onClick={() => setPending(p)}>
+                      <path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                    </IconButton>
                     <Switch
                       label={`${t('Activer')} ${p.name}`}
                       checked={p.enabled}
@@ -598,6 +668,10 @@ function WireguardTab({
         </Modal>
       )}
 
+      {editing && (
+        <EditTunnelModal profile={editing} act={act} onClose={() => setEditing(null)} />
+      )}
+
       {pending && (
         <ConfirmModal
           title={t('Supprimer ce tunnel ?')}
@@ -622,6 +696,85 @@ function WireguardTab({
         />
       )}
     </>
+  )
+}
+
+/**
+ * Editing a tunnel covers every field except the private key, which the API
+ * never returns and this form therefore cannot show. Leaving it alone is the
+ * point: a tunnel needing a new key is a new tunnel.
+ */
+function EditTunnelModal({
+  profile,
+  act,
+  onClose,
+}: {
+  profile: Profile
+  act: (fn: () => Promise<unknown>) => Promise<void>
+  onClose: () => void
+}) {
+  const t = useT()
+  const [name, setName] = useState(profile.name)
+  const [peer, setPeer] = useState(profile.peer ?? '')
+  const [publicKey, setPublicKey] = useState(profile.publicKey ?? '')
+  const [address, setAddress] = useState(profile.address.join(', '))
+  const [allowedIps, setAllowedIps] = useState(profile.allowedIps.join(', '))
+  const [keepalive, setKeepalive] = useState(String(profile.keepalive ?? 25))
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    // The card shows the peer as host:port, so the form takes it back the same
+    // way rather than splitting it into two fields that read as one.
+    const m = /^\[?([^\]]+?)\]?:(\d+)$/.exec(peer.trim())
+    if (!m) return setError(t('Pair : format attendu hôte:port'))
+
+    setBusy(true)
+    try {
+      await api(`/api/wireguard/${profile.tag}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: name.trim(),
+          host: m[1],
+          port: Number(m[2]),
+          publicKey: publicKey.trim(),
+          address,
+          allowedIps,
+          keepalive: Number(keepalive),
+        }),
+      })
+      onClose()
+      await act(async () => {})
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title={t('Modifier le tunnel')} wide onClose={onClose}>
+      <form className="flex flex-col gap-4" onSubmit={submit}>
+        <Field label={t('Nom du tunnel')} value={name} onChange={setName} autoFocus />
+        <Field label={t('Pair')} value={peer} onChange={setPeer} />
+        <Field label={t('Clé publique du pair')} value={publicKey} onChange={setPublicKey} />
+        <Field label={t('Adresse dans le tunnel')} value={address} onChange={setAddress} />
+        <Field label={t('Réseaux routés')} value={allowedIps} onChange={setAllowedIps} />
+        <Field label={t('Keepalive')} value={keepalive} onChange={setKeepalive} />
+        <p className="text-xs text-on-surface-variant">
+          {t('La clé privée n’est pas modifiée. Pour en changer, supprimez le tunnel et recréez-le.')}
+        </p>
+        {error && <Banner tone="error">{t(error)}</Banner>}
+        <div className="flex justify-end gap-2">
+          <TextButton onClick={onClose}>{t('Annuler')}</TextButton>
+          <FilledButton disabled={busy || !name.trim() || !peer.trim() || !publicKey.trim()}>
+            {t('Enregistrer')}
+          </FilledButton>
+        </div>
+      </form>
+    </Modal>
   )
 }
 
@@ -851,6 +1004,13 @@ function Plus() {
     <svg viewBox="0 0 24 24" className="size-[18px] fill-current" aria-hidden>
       <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
     </svg>
+  )
+}
+
+/** Bare path: IconButton supplies the surrounding svg. */
+function Pencil() {
+  return (
+    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm17.71-10.21a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
   )
 }
 

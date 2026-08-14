@@ -182,6 +182,12 @@ function parseWireguard(text: string): { endpoint: Endpoint; allowedIps: string[
 const slug = (name: string) =>
   name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'wg'
 
+/** Accepts either an array or the comma-separated string a form field yields. */
+const list = (v: unknown): string[] =>
+  (Array.isArray(v) ? v : String(v ?? '').split(/[,\s]+/))
+    .map((s) => String(s).trim())
+    .filter(Boolean)
+
 const isWgTag = (tag: string) => tag.startsWith(`${WG_ON}-`) || tag.startsWith(`${WG_OFF}-`)
 const isEnabled = (tag: string) => tag.startsWith(`${WG_ON}-`)
 const wgName = (tag: string) => tag.slice(tag.indexOf('-') + 1)
@@ -498,6 +504,69 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
 
     await commit(cfg)
     res.json({ ok: true, tag: endpoint.tag })
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+
+/**
+ * Edit a tunnel in place: its name and every peer field, but never its private
+ * key. That key is write-once by design — it is not returned by the API, so it
+ * cannot be shown in the form, and leaving it alone keeps that promise. A
+ * tunnel that needs a new key is a new tunnel.
+ */
+app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
+  try {
+    const name = String(req.body?.name ?? '').trim()
+    if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
+
+    const host = String(req.body?.host ?? '').trim()
+    const port = Number(req.body?.port)
+    const publicKey = String(req.body?.publicKey ?? '').trim()
+    const address = list(req.body?.address)
+    const allowedIps = list(req.body?.allowedIps)
+    if (!host) return res.status(400).json({ error: 'adresse du pair manquante' })
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      return res.status(400).json({ error: 'port du pair invalide' })
+    if (!publicKey) return res.status(400).json({ error: 'cle publique du pair manquante' })
+    if (!address.length) return res.status(400).json({ error: 'adresse dans le tunnel manquante' })
+    if (!allowedIps.length) return res.status(400).json({ error: 'reseaux routes manquants' })
+
+    const cfg = readConfig()
+    const ep = wgEndpoints(cfg).find((e) => e.tag === req.params.tag)
+    if (!ep) return res.status(404).json({ error: 'tunnel introuvable' })
+
+    const others = wgEndpoints(cfg).filter((e) => e !== ep)
+    if (others.some((e) => wgName(e.tag) === slug(name)))
+      return res.status(409).json({ error: 'un tunnel porte deja ce nom' })
+
+    const clash = others.find((e) => {
+      const p = e.peers?.[0]
+      return p && p.public_key === publicKey && p.address === host && p.port === port
+    })
+    if (clash)
+      return res
+        .status(409)
+        .json({ error: `ce tunnel est deja configure sous le nom : ${wgName(clash.tag)}` })
+
+    const keepalive = Number(req.body?.keepalive)
+    const peer = ep.peers?.[0]
+    if (!peer) return res.status(400).json({ error: 'tunnel sans pair' })
+
+    ep.tag = withState(`${WG_ON}-${slug(name)}`, isEnabled(ep.tag))
+    ep.address = address
+    peer.address = host
+    peer.port = port
+    peer.public_key = publicKey
+    peer.allowed_ips = allowedIps
+    peer.persistent_keepalive_interval = Number.isInteger(keepalive) && keepalive > 0 ? keepalive : 25
+
+    // The tag may just have changed, and routing rules point at tags — so they
+    // are rebuilt from the list rather than patched.
+    applyRouting(cfg, activeTarget(cfg) !== null)
+
+    await commit(cfg)
+    res.json({ ok: true, tag: ep.tag })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
   }
