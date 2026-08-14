@@ -68,8 +68,13 @@ curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/install
   | ADMIN_PASSWORD='choose-something-long' PUBLIC_HOST=tunnel.example.com sh
 ```
 
-It pulls the latest release. `ADMIN_PASSWORD` is only written when supplied,
-so an update keeps the password already in use.
+It pulls the latest release. `ADMIN_PASSWORD` is optional: leave it out and
+the interface asks for a password on first visit. An update keeps the password
+already in use.
+
+> **Status: early development.** Expect breaking changes between versions
+> rather than migration paths — upgrade by reinstalling and, if the interface
+> comes up asking for a password, set it again.
 
 ## Build from source
 

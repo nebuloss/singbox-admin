@@ -108,21 +108,13 @@ if [ -n "$ADMIN_PASSWORD" ]; then
     && info "Mot de passe hache dans $APP_DIR/auth.json"
 elif [ -f "$APP_DIR/auth.json" ]; then
   info "Mot de passe existant conserve"
-elif [ -f "$APP_DIR/.env" ]; then
-  # Upgrade from a version that kept the password in clear text: hash the one
-  # already in use rather than silently leaving the interface unclaimed.
-  OLD=$(sed -n 's/^ADMIN_PASSWORD=//p' "$APP_DIR/.env" | head -1)
-  if [ -n "$OLD" ]; then
-    "$NODE_BIN" "$APP_DIR/dist-server/reset-password.js" "$OLD" >/dev/null \
-      && info "Mot de passe existant migre vers un hachage"
-  fi
-  unset OLD
 fi
 
-# A previous version stored the password in clear text here.
+# Not a compatibility shim: this file never belongs on disk, so remove it
+# wherever it turns up rather than leaving a password in clear text behind.
 if [ -f "$APP_DIR/.env" ]; then
   rm -f "$APP_DIR/.env"
-  warn "Ancien .env (mot de passe en clair) supprime"
+  warn "Fichier .env supprime (un mot de passe n'a rien a faire en clair)"
 fi
 
 # Check the outcome rather than which branch ran: an empty or password-less
