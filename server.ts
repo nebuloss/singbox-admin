@@ -195,9 +195,17 @@ const withState = (tag: string, on: boolean) => `${on ? WG_ON : WG_OFF}-${wgName
 
 const wgEndpoints = (cfg: Config) => (cfg.endpoints ?? []).filter((e) => isWgTag(e.tag))
 
-/** The tunnel currently carrying traffic, if any. */
+/**
+ * The tunnel currently carrying traffic, if any — counting only a rule that
+ * points at a tunnel still present.
+ *
+ * Same reasoning as disabledUsers: a rule naming a tag nobody defines is stale,
+ * and taking it at face value would report the outbound as on while sing-box
+ * refuses to start on exactly that dangling reference.
+ */
 function activeTarget(cfg: Config): string | null {
-  const rule = cfg.route?.rules?.find((r) => r.outbound && isWgTag(r.outbound))
+  const tags = new Set(wgEndpoints(cfg).map((e) => e.tag))
+  const rule = cfg.route?.rules?.find((r) => r.outbound && tags.has(r.outbound))
   return rule?.outbound ?? null
 }
 
@@ -236,8 +244,23 @@ function applyRouting(cfg: Config, on: boolean) {
  */
 const isRejectRule = (r: Rule) => r.action === 'reject' && Array.isArray(r.auth_user)
 
+/**
+ * The suspended devices — intersected with the devices that actually exist.
+ *
+ * The UUID is the identity and never changes, but the rule can only match on
+ * the name, so the two are kept in step on every rename. Filtering here closes
+ * the one case the code does not control: a config edited by hand, where a
+ * device was renamed or removed without its rule following. A leftover name
+ * would otherwise lie in wait and suspend the next device to be given it.
+ */
 function disabledUsers(cfg: Config): Set<string> {
-  return new Set(cfg.route?.rules?.find(isRejectRule)?.auth_user ?? [])
+  const live = new Set(
+    (cfg.inbounds?.find((i) => i.type === 'vless')?.users ?? [])
+      .map((u) => u.name)
+      .filter((n): n is string => Boolean(n)),
+  )
+  const listed = cfg.route?.rules?.find(isRejectRule)?.auth_user ?? []
+  return new Set(listed.filter((n) => live.has(n)))
 }
 
 function applyUserRules(cfg: Config, disabled: Set<string>) {
