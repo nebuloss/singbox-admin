@@ -31,6 +31,11 @@ app.use(express.json())
 app.use(cookieParser())
 
 const PORT = Number(process.env.PORT ?? 3000)
+// A second listener carrying only what the outside may see: a device's profile,
+// and a cover page for everything else. It is a separate socket rather than a
+// check inside the interface, so the administration cannot be reached from the
+// public name by any request at all — there is no code path to it.
+const PUBLIC_PORT_LISTEN = Number(process.env.PUBLIC_LISTEN ?? 3001)
 const CONFIG_PATH = process.env.SINGBOX_CONFIG ?? '/etc/sing-box/config.json'
 const SERVICE = process.env.SINGBOX_SERVICE ?? 'sing-box'
 // PUBLIC_HOST / PUBLIC_PORT are a bootstrap, like ADMIN_PASSWORD: they seed
@@ -280,10 +285,11 @@ function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase
  * the phone cannot resolve, which is why it is worth setting.
  */
 /**
- * The reverse-proxy configuration for the public name, written out from what
- * the app actually knows: where sing-box listens, which prefix belongs to this
- * app, and nothing else. Handing it over beats documenting it — that is how
- * two places drift apart.
+ * The reverse-proxy configuration for the public name.
+ *
+ * It names no path and no shape: an upgrade is the tunnel, anything else is the
+ * public listener. That is the whole rule, so regenerating the tunnel path — or
+ * adding a device — never touches the proxy.
  */
 function proxySnippet(cfg: Config, appPort: number): string {
   const singbox = liveInbound(cfg).listen_port ?? 8081
@@ -295,19 +301,15 @@ function proxySnippet(cfg: Config, appPort: number): string {
       .flat()
       .find((i) => i && i.family === 'IPv4' && !i.internal)?.address ?? '127.0.0.1'
   return [
-    '# La racine est servie directement : autant lui epargner un aller-retour.',
-    'location = / {',
-    '  root /var/www/decoy;',
-    '  try_files /index.html =404;',
-    '}',
-    '',
-    '# Une adresse en forme d identifiant : le tunnel si la requete demande un',
-    '# upgrade WebSocket, sinon un appareil qui vient chercher son profil.',
-    `location ~ "^/${UUID_PATH}$" {`,
+    '# Un upgrade WebSocket est le tunnel ; tout le reste est la vitrine',
+    "# publique de l'interface, qui ne sert que les profils et une page",
+    '# quelconque. Aucun chemin, aucune forme : rien a tenir a jour ici.',
+    'location / {',
     `  set $backend ${host}:${appPort};`,
     `  if ($http_upgrade ~* websocket) { set $backend ${host}:${singbox}; }`,
     '  proxy_pass http://$backend;',
     '  proxy_set_header Host $host;',
+    '  proxy_set_header X-Real-IP $remote_addr;',
     '  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
     '  proxy_set_header X-Forwarded-Proto $scheme;',
     '  proxy_set_header Upgrade $http_upgrade;',
@@ -315,28 +317,14 @@ function proxySnippet(cfg: Config, appPort: number): string {
     '  proxy_http_version 1.1;',
     '  proxy_read_timeout 86400s;',
     '  proxy_send_timeout 86400s;',
+    '  # Un chemin que sing-box refuse ressort en page quelconque, comme le reste.',
     '  proxy_intercept_errors on;',
-    '  error_page 400 401 403 404 500 502 503 504 = @couverture;',
+    '  error_page 400 401 403 404 500 502 503 504 = @vitrine;',
     '}',
     '',
-    '# Tout le reste va a sing-box : les chemins de tunnel plus anciens, qui',
-    '# ne sont pas des identifiants. Les refus sont rattrapes comme le reste.',
-    'location / {',
-    `  proxy_pass http://${host}:${singbox};`,
+    'location @vitrine {',
+    `  proxy_pass http://${host}:${appPort}/;`,
     '  proxy_set_header Host $host;',
-    '  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
-    '  proxy_set_header Upgrade $http_upgrade;',
-    '  proxy_set_header Connection $http_connection;',
-    '  proxy_http_version 1.1;',
-    '  proxy_read_timeout 86400s;',
-    '  proxy_send_timeout 86400s;',
-    '  proxy_intercept_errors on;',
-    '  error_page 400 401 403 404 500 502 503 504 = @couverture;',
-    '}',
-    '',
-    'location @couverture {',
-    '  root /var/www/decoy;',
-    '  try_files /index.html =404;',
     '}',
   ].join('\n')
 }
@@ -688,7 +676,7 @@ app.get('/api/state', async (req, res) => {
       service: { running: /started|running|active/i.test(status.out), version },
       tunnel: { host: base.host, port: base.port, path: wsPath },
       publicUrl: readAdminConfig(ADMIN_CONFIG).publicUrl,
-      proxySnippet: proxySnippet(cfg, PORT),
+      proxySnippet: proxySnippet(cfg, PUBLIC_PORT_LISTEN),
       wireguard: wireguardSummary(cfg, names),
     })
   } catch (e) {
@@ -1058,6 +1046,65 @@ app.get(`/:uuid(${UUID_PATH})`, (req, res) => {
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
   }
+})
+
+/**
+ * The public face: a device's profile, and an unremarkable page for everything
+ * else. Deliberately a separate Express app on its own socket — the interface
+ * and its API are simply not mounted here, so no request arriving from outside
+ * can reach them however it is shaped.
+ */
+const COVER = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Static Asset Delivery</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         font:15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         background:#fafafa; color:#333 }
+  main { max-width:30rem; padding:2rem }
+  h1 { font-size:1.15rem; font-weight:600; margin:0 0 .75rem }
+  p { margin:0 0 .6rem; color:#666 }
+  @media (prefers-color-scheme: dark) { body{background:#16181a;color:#d6d6d6} p{color:#9a9a9a} }
+</style>
+</head>
+<body><main>
+  <h1>Static asset delivery</h1>
+  <p>This host serves cached static resources. There is no browsable index.</p>
+</main></body>
+</html>
+`
+
+const publicApp = express()
+publicApp.disable('x-powered-by')
+
+publicApp.get(`/:uuid(${UUID_PATH})`, (req, res) => {
+  try {
+    const cfg = readConfig()
+    const user = allUsers(cfg).find((u) => u.uuid === req.params.uuid)
+    // An identifier nobody holds is answered exactly like any other address:
+    // there is no reply that says "not this one".
+    if (!user) return res.type('html').send(COVER)
+
+    const wsPath = liveInbound(cfg).transport?.path ?? '/'
+    const name = readAdminConfig(ADMIN_CONFIG).names[user.uuid] ?? user.uuid.slice(0, 8)
+    res.set('profile-title', `base64:${Buffer.from(name, 'utf8').toString('base64')}`)
+    res.set('profile-update-interval', '24')
+    res
+      .type('application/json')
+      .send(JSON.stringify(clientProfile(user, cfg, wsPath, publicBase(req)), null, 2))
+  } catch {
+    res.type('html').send(COVER)
+  }
+})
+
+publicApp.use((_req, res) => res.type('html').send(COVER))
+
+publicApp.listen(PUBLIC_PORT_LISTEN, () => {
+  console.log(`vitrine publique on :${PUBLIC_PORT_LISTEN} — profils et page de couverture`)
 })
 
 // ── SPA. __dirname is dist-server/ at runtime, so the bundle sits in ../dist.
