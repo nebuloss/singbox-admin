@@ -18,7 +18,7 @@ import {
   TonalButton,
 } from './ui'
 
-export type User = { uuid: string; name?: string; link: string; qr: string; enabled: boolean }
+export type User = { uuid: string; name?: string; link: string; sub: string; qr: string; enabled: boolean }
 export type Profile = {
   tag: string
   name: string
@@ -307,6 +307,44 @@ function DevicesTab({
   )
 }
 
+/** A read-only value with the one button anyone actually wants next to it. */
+function Copyable({
+  label,
+  value,
+  copyLabel,
+  rows = 2,
+}: {
+  label: string
+  value: string
+  copyLabel: string
+  rows?: number
+}) {
+  const t = useT()
+  const [copied, setCopied] = useState(false)
+  return (
+    <div>
+      <p className="mb-1 text-xs font-medium text-on-surface-variant">{label}</p>
+      <textarea
+        readOnly
+        rows={rows}
+        value={value}
+        onClick={(e) => e.currentTarget.select()}
+        className="w-full resize-none rounded-[var(--radius-md3-m)] bg-surface-low p-3 font-mono text-[11px] leading-relaxed break-all text-on-surface-variant outline-none focus:ring-2 focus:ring-primary"
+      />
+      <TonalButton
+        className="mt-2"
+        onClick={() => {
+          void navigator.clipboard.writeText(value)
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1600)
+        }}
+      >
+        {copied ? t('Copié') : copyLabel}
+      </TonalButton>
+    </div>
+  )
+}
+
 function UserCard({
   user,
   busy,
@@ -321,7 +359,6 @@ function UserCard({
   onRevoke: () => void
 }) {
   const t = useT()
-  const [copied, setCopied] = useState(false)
   return (
     <li
       className={`overflow-hidden rounded-[var(--radius-md3-xl)] bg-surface-container transition-opacity ${
@@ -362,23 +399,17 @@ function UserCard({
               {t('Le lien reste valide : réactiver l’appareil suffit à le remettre en service.')}
             </p>
           )}
-          <textarea
-            readOnly
-            rows={3}
-            value={user.link}
-            onClick={(e) => e.currentTarget.select()}
-            className="w-full resize-none rounded-[var(--radius-md3-m)] bg-surface-low p-3 font-mono text-[11px] leading-relaxed break-all text-on-surface-variant outline-none focus:ring-2 focus:ring-primary"
+          <Copyable
+            label={t('Abonnement — importez ceci, le DNS est compris')}
+            value={user.sub}
+            copyLabel={t('Copier l’abonnement')}
           />
-          <TonalButton
-            className="self-start"
-            onClick={() => {
-              void navigator.clipboard.writeText(user.link)
-              setCopied(true)
-              setTimeout(() => setCopied(false), 1600)
-            }}
-          >
-            {copied ? t('Copié') : t('Copier le lien')}
-          </TonalButton>
+          <Copyable
+            label={t('Lien simple — sans réglage DNS')}
+            value={user.link}
+            copyLabel={t('Copier le lien')}
+            rows={3}
+          />
         </div>
       </div>
     </li>

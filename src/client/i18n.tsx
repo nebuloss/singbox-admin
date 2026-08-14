@@ -50,6 +50,10 @@ const EN: Record<string, string> = {
   'Le lien reste valide : réactiver l’appareil suffit à le remettre en service.':
     'The link stays valid: switching the device back on is all it takes.',
   'Copier le lien': 'Copy the link',
+  'Copier l’abonnement': 'Copy the subscription',
+  'Abonnement — importez ceci, le DNS est compris':
+    'Subscription — import this one, DNS included',
+  'Lien simple — sans réglage DNS': 'Plain link — carries no DNS setting',
   Copié: 'Copied',
 
   // WireGuard

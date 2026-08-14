@@ -185,6 +185,74 @@ function linkFor(user: User, name: string | undefined, wsPath: string): string {
 }
 
 /**
+ * A full client profile, served at a URL the device can subscribe to.
+ *
+ * The share link cannot carry DNS — the vless:// format has no field for it —
+ * so a device imported from a link resolves names however it likes, which is
+ * why internal names failed on the phone. A profile can carry it: the resolver
+ * here is the tunnel's own, reached through the proxy, so an internal name
+ * gets its internal answer wherever the device happens to be.
+ */
+function clientProfile(user: User, name: string | undefined, cfg: Config, wsPath: string) {
+  const serving = wgEndpoints(cfg).find((e) => isEnabled(e.tag))
+  const resolver = serving ? dnsFor(cfg, serving)?.server : undefined
+  const internal = serving?.peers?.[0]?.allowed_ips ?? []
+
+  return {
+    log: { level: 'warn' },
+    dns: {
+      servers: [
+        // Through the proxy, so it answers with what the tunnel can reach.
+        { type: 'udp', tag: 'remote', server: resolver ?? '1.1.1.1', detour: 'proxy' },
+        { type: 'udp', tag: 'local', server: '1.1.1.1' },
+      ],
+      final: 'remote',
+    },
+    inbounds: [
+      {
+        type: 'tun',
+        tag: 'tun-in',
+        address: ['172.19.0.1/30'],
+        auto_route: true,
+        strict_route: true,
+      },
+    ],
+    outbounds: [
+      {
+        type: 'vless',
+        tag: 'proxy',
+        server: PUBLIC_HOST,
+        server_port: PUBLIC_PORT,
+        uuid: user.uuid,
+        tls: { enabled: true, server_name: PUBLIC_HOST },
+        transport: { type: 'ws', path: wsPath },
+      },
+      { type: 'direct', tag: 'direct' },
+    ],
+    route: {
+      rules: [
+        // The tunnel's own networks, named explicitly so they hold even if the
+        // profile is later edited to stop routing everything.
+        ...(internal.length ? [{ ip_cidr: internal, outbound: 'proxy' }] : []),
+      ],
+      final: 'proxy',
+      default_domain_resolver: { server: 'remote' },
+    },
+    experimental: {
+      cache_file: { enabled: true },
+    },
+    // Not read by sing-box; it is what the device shows in its profile list.
+    remarks: name || user.uuid.slice(0, 8),
+  }
+}
+
+/** Built from how the interface was reached, so the link works where it does. */
+function subscriptionUrl(req: express.Request, uuid: string): string {
+  const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0] || req.protocol
+  return `${proto}://${req.get('host')}/sub/${uuid}`
+}
+
+/**
  * Parse a standard WireGuard client configuration — the .conf a router or
  * provider hands you — into a sing-box endpoint. Accepting that format
  * directly avoids retyping five fields and getting one wrong.
@@ -496,7 +564,10 @@ app.get('/api/state', async (req, res) => {
     const describe = async (u: User, enabled: boolean) => {
       const name = names[u.uuid]
       const link = linkFor(u, name, wsPath)
-      return { uuid: u.uuid, name, link, enabled, qr: await QRCode.toString(link, { type: 'svg', margin: 1 }) }
+      const sub = subscriptionUrl(req, u.uuid)
+      // The QR carries the subscription rather than the bare link: same device,
+      // but it arrives configured, DNS included.
+      return { uuid: u.uuid, name, link, sub, enabled, qr: await QRCode.toString(sub, { type: 'svg', margin: 1 }) }
     }
     const users = await Promise.all([
       ...(inbound.users ?? []).map((u) => describe(u, true)),
@@ -836,6 +907,25 @@ app.delete('/api/wireguard/:tag', requireAuth, async (req, res) => {
       return { ...s, names: rest }
     })
     res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: String((e as Error).message) })
+  }
+})
+
+/**
+ * The profile itself. Deliberately outside the session: the UUID in the path is
+ * the same credential the link carries, so a device that can use one can fetch
+ * the other, and nothing else can.
+ */
+app.get('/sub/:uuid', (req, res) => {
+  try {
+    const cfg = readConfig()
+    const user = allUsers(cfg).find((u) => u.uuid === req.params.uuid)
+    if (!user) return res.status(404).json({ error: 'inconnu' })
+
+    const wsPath = liveInbound(cfg).transport?.path ?? '/'
+    const name = readAdminConfig(ADMIN_CONFIG).names[user.uuid]
+    res.type('application/json').send(JSON.stringify(clientProfile(user, name, cfg, wsPath), null, 2))
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
   }
