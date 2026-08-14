@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useHashTab } from './hooks'
-import { useI18n, useT } from './i18n'
+import { useT } from './i18n'
 import {
   Banner,
   Card,
@@ -11,6 +11,7 @@ import {
   Field,
   FilledButton,
   IconButton,
+  LangToggle,
   Modal,
   Row,
   Switch,
@@ -113,6 +114,10 @@ export default function App() {
             </span>
             <h1 className="text-[1.75rem] leading-9 font-normal">sing-box</h1>
             <p className="mt-2 text-base text-on-surface-variant">{t('Administration du tunnel')}</p>
+            {/* Someone landing here in the wrong language had no way out. */}
+            <div className="mt-5">
+              <LangToggle />
+            </div>
           </div>
 
           {state.setup ? (
@@ -169,6 +174,7 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <LangToggle />
             <span
               className={`inline-block size-2 rounded-full ${running ? 'bg-primary' : 'bg-error'}`}
               title={running ? t('service actif') : t('service arrêté')}
@@ -890,7 +896,7 @@ function AppsTab() {
 /* ── Paramètres ──────────────────────────────────────────────────────────── */
 
 function SettingsTab({ state }: { state: State }) {
-  const { t, lang, setLang } = useI18n()
+  const t = useT()
   const [open, setOpen] = useState(false)
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
@@ -931,29 +937,6 @@ function SettingsTab({ state }: { state: State }) {
             <Row label={t('Chemin WebSocket')}>{state.tunnel?.path}</Row>
           </tbody>
         </table>
-      </Card>
-
-      <Card className="mb-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl leading-7 font-normal">{t('Langue')}</h2>
-            <p className="mt-1 text-sm text-on-surface-variant">{t('Langue de l’interface.')}</p>
-          </div>
-          <div className="inline-flex rounded-[var(--radius-md3-full)] border border-outline">
-            {(['fr', 'en'] as const).map((l, i) => (
-              <button
-                key={l}
-                type="button"
-                onClick={() => setLang(l)}
-                className={`state-layer h-10 px-5 text-sm font-medium ${
-                  lang === l ? 'bg-secondary-container text-on-secondary-container' : 'text-on-surface-variant'
-                } ${i === 0 ? 'rounded-l-[var(--radius-md3-full)]' : 'border-l border-outline rounded-r-[var(--radius-md3-full)]'}`}
-              >
-                {l === 'fr' ? t('Français') : t('Anglais')}
-              </button>
-            ))}
-          </div>
-        </div>
       </Card>
 
       <Card>

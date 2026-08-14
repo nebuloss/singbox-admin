@@ -1,5 +1,5 @@
 import { useEscapeKey } from './hooks'
-import { useT } from './i18n'
+import { useI18n, useT } from './i18n'
 
 /* Material 3 primitives, shared by every tab. */
 
@@ -177,6 +177,39 @@ export function Chip({
     >
       {children}
     </Tag>
+  )
+}
+
+/**
+ * Two languages, so a segmented pair rather than a dropdown: the alternative is
+ * visible without opening anything, which is the point of putting it in the app
+ * bar and on the sign-in screen instead of burying it in settings.
+ */
+export function LangToggle() {
+  const { lang, setLang } = useI18n()
+  return (
+    <div
+      className="inline-flex h-8 shrink-0 overflow-hidden rounded-[var(--radius-md3-full)] border border-outline-variant"
+      role="group"
+      aria-label="Language"
+    >
+      {(['fr', 'en'] as const).map((l) => (
+        <button
+          key={l}
+          type="button"
+          lang={l}
+          aria-pressed={lang === l}
+          onClick={() => setLang(l)}
+          className={`state-layer px-2.5 text-xs font-medium uppercase ${
+            lang === l
+              ? 'bg-secondary-container text-on-secondary-container'
+              : 'text-on-surface-variant'
+          }`}
+        >
+          {l}
+        </button>
+      ))}
+    </div>
   )
 }
 

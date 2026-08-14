@@ -110,10 +110,6 @@ const EN: Record<string, string> = {
   Version: 'Version',
   'Nom public': 'Public hostname',
   'Chemin WebSocket': 'WebSocket path',
-  Langue: 'Language',
-  'Langue de l’interface.': 'Interface language.',
-  Français: 'French',
-  Anglais: 'English',
   'Accès à cette interface.': 'Access to this interface.',
   'Modifié — les autres sessions ont été fermées.':
     'Changed — every other session was signed out.',
@@ -189,11 +185,26 @@ const EN: Record<string, string> = {
   'erreur HTTP': 'HTTP error',
 }
 
-const detect = (): Lang => {
-  const saved = localStorage.getItem('lang')
-  if (saved === 'fr' || saved === 'en') return saved
-  return navigator.language.toLowerCase().startsWith('fr') ? 'fr' : 'en'
+/**
+ * The choice is kept in a cookie rather than localStorage: it is small, it is
+ * not secret, and the server can read it if it ever needs to render anything
+ * in the right language. Deliberately not `secure` — the interface is also
+ * reached over plain HTTP on a local network, and a display preference is not
+ * worth losing there.
+ */
+const COOKIE = 'lang'
+
+const saved = (): Lang | null => {
+  const m = document.cookie.match(/(?:^|;\s*)lang=(fr|en)(?:;|$)/)
+  return m ? (m[1] as Lang) : null
 }
+
+const remember = (l: Lang) => {
+  document.cookie = `${COOKIE}=${l}; path=/; max-age=31536000; samesite=lax`
+}
+
+/** Falls back to the browser's own language, which follows the system. */
+const detect = (): Lang => saved() ?? (navigator.language.toLowerCase().startsWith('fr') ? 'fr' : 'en')
 
 export type Ctx = { lang: Lang; setLang: (l: Lang) => void; t: (s: string) => string }
 
@@ -225,7 +236,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   }, [lang])
 
   const setLang = (l: Lang) => {
-    localStorage.setItem('lang', l)
+    remember(l)
     setLangState(l)
   }
 
