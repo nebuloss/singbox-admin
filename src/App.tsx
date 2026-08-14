@@ -6,6 +6,7 @@ import {
   Chip,
   ConfirmModal,
   Empty,
+  ErrorModal,
   Field,
   FilledButton,
   IconButton,
@@ -201,17 +202,13 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-3xl px-4 pt-6 pb-16 sm:px-6">
-        {error && (
-          <Banner tone="error" className="mb-6">
-            {error}
-          </Banner>
-        )}
-
         {tab === 'appareils' && <DevicesTab state={state} busy={busy} act={act} />}
         {tab === 'wireguard' && <WireguardTab wg={state.wireguard} busy={busy} act={act} />}
         {tab === 'applications' && <AppsTab />}
         {tab === 'parametres' && <SettingsTab state={state} />}
       </main>
+
+      {error && <ErrorModal message={error} onClose={() => setError('')} />}
     </div>
   )
 }
@@ -350,6 +347,8 @@ function WireguardTab({
   const [name, setName] = useState('')
   const [conf, setConf] = useState('')
   const [formError, setFormError] = useState('')
+  const [dragging, setDragging] = useState<number | null>(null)
+  const [over, setOver] = useState<number | null>(null)
 
   const profiles = wg?.profiles ?? []
   const on = Boolean(wg?.enabled)
@@ -415,6 +414,9 @@ function WireguardTab({
       <div className="mb-3 flex items-center justify-between px-1">
         <h2 className="text-sm font-medium tracking-wide text-on-surface-variant uppercase">
           Tunnels · {profiles.length}
+          {profiles.length > 1 && (
+            <span className="ml-2 hidden font-normal normal-case sm:inline">— glissez pour réordonner</span>
+          )}
         </h2>
         <TonalButton onClick={() => { setFormError(''); setAdding(true) }}>
           <Plus /> Ajouter
@@ -428,12 +430,34 @@ function WireguardTab({
             return (
               <li
                 key={p.tag}
-                className={`rounded-[var(--radius-md3-xl)] p-5 ${
+                draggable
+                onDragStart={() => setDragging(i)}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  setOver(i)
+                }}
+                onDragEnd={() => {
+                  if (dragging !== null && over !== null && dragging !== over) move(dragging, over)
+                  setDragging(null)
+                  setOver(null)
+                }}
+                className={`rounded-[var(--radius-md3-xl)] p-5 transition-[opacity,box-shadow] ${
                   serving ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container'
-                } ${p.enabled ? '' : 'opacity-60'}`}
+                } ${p.enabled ? '' : 'opacity-60'} ${dragging === i ? 'opacity-40' : ''} ${
+                  over === i && dragging !== null && dragging !== i ? 'ring-2 ring-primary' : ''
+                }`}
               >
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
+                    <span
+                      className="hidden cursor-grab text-on-surface-variant active:cursor-grabbing sm:block"
+                      title="Glisser pour réordonner"
+                      aria-hidden
+                    >
+                      <svg viewBox="0 0 24 24" className="size-5 fill-current">
+                        <path d="M9 4h2v2H9V4zm4 0h2v2h-2V4zM9 9h2v2H9V9zm4 0h2v2h-2V9zm-4 5h2v2H9v-2zm4 0h2v2h-2v-2zm-4 5h2v2H9v-2zm4 0h2v2h-2v-2z" />
+                      </svg>
+                    </span>
                     <span className="grid size-7 shrink-0 place-items-center rounded-full bg-surface-low text-xs font-medium text-on-surface-variant">
                       {i + 1}
                     </span>

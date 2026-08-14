@@ -380,7 +380,26 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     endpoint.tag = `${WG_ON}-${slug(name)}`
 
     const cfg = readConfig()
-    cfg.endpoints = [...(cfg.endpoints ?? []).filter((e) => e.tag !== endpoint.tag), endpoint]
+    const existing = wgEndpoints(cfg)
+
+    // Two ways to end up with the same tunnel twice, both worth refusing: the
+    // same name, and the same peer pasted under a different name. The second
+    // is the one that actually bites — a duplicate would sit in the list doing
+    // nothing, since only the first enabled one ever serves.
+    if (existing.some((e) => wgName(e.tag) === slug(name)))
+      return res.status(409).json({ error: 'un tunnel porte deja ce nom' })
+
+    const peer = endpoint.peers[0]
+    const same = existing.find((e) => {
+      const p = e.peers?.[0]
+      return p && p.public_key === peer.public_key && p.address === peer.address && p.port === peer.port
+    })
+    if (same)
+      return res
+        .status(409)
+        .json({ error: `ce tunnel est deja configure sous le nom « ${wgName(same.tag)} »` })
+
+    cfg.endpoints = [...(cfg.endpoints ?? []), endpoint]
 
     // Rebuild routing from the resulting order, keeping the current mode.
     applyRouting(cfg, activeTarget(cfg) !== null)

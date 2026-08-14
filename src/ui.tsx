@@ -319,3 +319,28 @@ export function Switch({
     </button>
   )
 }
+
+/**
+ * Errors from an action the user just took. A banner at the top of a scrolled
+ * page is easy to miss; a modal cannot be ignored and states what failed.
+ * Errors *inside* a form stay inline next to the field, as in evs-app.
+ */
+export function ErrorModal({ message, onClose }: { message: string; onClose: () => void }) {
+  return (
+    <Modal title="Échec de l’opération" onClose={onClose}>
+      <div className="flex gap-4">
+        <span className="grid size-10 shrink-0 place-items-center rounded-full bg-error-container text-on-error-container">
+          <svg viewBox="0 0 24 24" className="size-6 fill-current" aria-hidden>
+            <path d="M11 15h2v2h-2v-2zm0-8h2v6h-2V7zm1-5C6.47 2 2 6.5 2 12a10 10 0 1 0 10-10zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z" />
+          </svg>
+        </span>
+        <p className="min-w-0 flex-1 text-sm break-words text-on-surface-variant">{message}</p>
+      </div>
+      <div className="mt-6 flex justify-end">
+        <FilledButton type="button" onClick={onClose}>
+          Fermer
+        </FilledButton>
+      </div>
+    </Modal>
+  )
+}
