@@ -323,7 +323,7 @@ function proxySnippet(cfg: Config, appPort: number): string {
     '}',
     '',
     'location @vitrine {',
-    `  proxy_pass http://${host}:${appPort}/;`,
+    `  proxy_pass http://${host}:${appPort};`,
     '  proxy_set_header Host $host;',
     '}',
   ].join('\n')
