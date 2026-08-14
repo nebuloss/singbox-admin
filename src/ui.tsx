@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useEscapeKey } from './hooks'
 import { useI18n, useT } from './i18n'
 
@@ -18,6 +19,7 @@ export function Field({
   type = 'text',
   autoFocus,
   className = '',
+  error,
 }: {
   label: string
   value: string
@@ -25,20 +27,33 @@ export function Field({
   type?: string
   autoFocus?: boolean
   className?: string
+  /** Shown under the field, in the error colour. Say what is wrong, not that
+   *  something is: this is read while typing, not after a failed submit. */
+  error?: string
 }) {
   return (
-    <label className={`relative block ${className}`}>
-      <input
-        type={type}
-        value={value}
-        autoFocus={autoFocus}
-        placeholder=" "
-        onChange={(e) => onChange(e.target.value)}
-        className="peer h-14 w-full rounded-[var(--radius-md3-xs)] border border-outline bg-transparent px-4 pt-4 text-base text-on-surface outline-none transition-colors focus:border-2 focus:border-primary focus:px-[15px]"
-      />
-      <span className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-base text-on-surface-variant transition-all peer-focus:top-2.5 peer-focus:text-xs peer-focus:text-primary peer-[:not(:placeholder-shown)]:top-2.5 peer-[:not(:placeholder-shown)]:text-xs">
-        {label}
+    <label className={`block ${className}`}>
+      <span className="relative block">
+        <input
+          type={type}
+          value={value}
+          autoFocus={autoFocus}
+          placeholder=" "
+          aria-invalid={Boolean(error)}
+          onChange={(e) => onChange(e.target.value)}
+          className={`peer h-14 w-full rounded-[var(--radius-md3-xs)] border bg-transparent px-4 pt-4 text-base text-on-surface outline-none transition-colors focus:border-2 focus:px-[15px] ${
+            error ? 'border-error focus:border-error' : 'border-outline focus:border-primary'
+          }`}
+        />
+        <span
+          className={`pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-base transition-all peer-focus:top-2.5 peer-focus:text-xs peer-[:not(:placeholder-shown)]:top-2.5 peer-[:not(:placeholder-shown)]:text-xs ${
+            error ? 'text-error' : 'text-on-surface-variant peer-focus:text-primary'
+          }`}
+        >
+          {label}
+        </span>
       </span>
+      {error && <span className="mt-1.5 block px-4 text-xs text-error">{error}</span>}
     </label>
   )
 }
@@ -282,6 +297,63 @@ export function Modal({
         {children}
       </div>
     </div>
+  )
+}
+
+/**
+ * The shape every editing modal shares: hold a draft, submit it, show the
+ * failure inline if it fails, close if it does not. Written once here so each
+ * tab contributes only its fields — and so a fix to the submit behaviour, or
+ * to how a failure is shown, reaches all of them.
+ *
+ * onSubmit is expected to throw on failure; the message is rendered as it
+ * comes, translated, without closing the modal, so nothing typed is lost.
+ */
+export function FormModal({
+  title,
+  wide,
+  submitLabel,
+  disabled,
+  onSubmit,
+  onClose,
+  children,
+}: {
+  title: string
+  wide?: boolean
+  submitLabel?: string
+  disabled?: boolean
+  onSubmit: () => Promise<unknown>
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  const t = useT()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setBusy(true)
+    try {
+      await onSubmit()
+      onClose()
+    } catch (err) {
+      setError((err as Error).message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title={title} wide={wide} onClose={onClose}>
+      <form className="flex flex-col gap-4" onSubmit={submit}>
+        {children}
+        {error && <Banner tone="error">{t(error)}</Banner>}
+        <div className="mt-2 flex justify-end gap-2">
+          <TextButton onClick={onClose}>{t('Annuler')}</TextButton>
+          <FilledButton disabled={busy || disabled}>{submitLabel ?? t('Enregistrer')}</FilledButton>
+        </div>
+      </form>
+    </Modal>
   )
 }
 

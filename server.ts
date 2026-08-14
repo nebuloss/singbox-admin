@@ -447,17 +447,21 @@ app.get('/api/state', async (req, res) => {
 
 // Letters of any script, so an accented or non-Latin name is not "invalid".
 const NAME_RE = /^[\p{L}\p{N} ._@()'’-]{1,40}$/u
-const taken = (names: Names, name: string, except?: string) =>
-  Object.entries(names).some(
-    ([k, v]) => k !== except && v.toLocaleLowerCase() === name.toLocaleLowerCase(),
-  )
+// Devices and tunnels are named in the same file but not in the same space:
+// two devices may not share a name, a device and a tunnel may.
+const deviceNames = (names: Names) => Object.entries(names).filter(([k]) => !k.startsWith('wg:'))
+const tunnelNames = (names: Names) => Object.entries(names).filter(([k]) => k.startsWith('wg:'))
+
+const taken = (entries: [string, string][], name: string, except?: string) =>
+  entries.some(([k, v]) => k !== except && v.toLocaleLowerCase() === name.toLocaleLowerCase())
 
 app.post('/api/users', requireAuth, async (req, res) => {
   const name = String(req.body?.name ?? '').trim()
   if (!NAME_RE.test(name)) return res.status(400).json({ error: 'nom invalide' })
   try {
     const names = readAdminConfig(ADMIN_CONFIG).names
-    if (taken(names, name)) return res.status(409).json({ error: 'ce nom existe deja' })
+    if (taken(deviceNames(names), name))
+      return res.status(409).json({ error: 'ce nom existe deja' })
 
     const uuid = crypto.randomUUID()
     const cfg = readConfig()
@@ -509,7 +513,7 @@ app.patch('/api/users/:uuid', requireAuth, (req, res) => {
       return res.status(404).json({ error: 'inconnu' })
 
     const names = readAdminConfig(ADMIN_CONFIG).names
-    if (taken(names, name, req.params.uuid))
+    if (taken(deviceNames(names), name, req.params.uuid))
       return res.status(409).json({ error: 'ce nom existe deja' })
 
     updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [req.params.uuid]: name } }))
@@ -561,7 +565,8 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     // same name, and the same peer pasted under a different name. The second
     // is the one that actually bites — a duplicate would sit in the list doing
     // nothing, since only the first enabled one ever serves.
-    if (taken(names, name)) return res.status(409).json({ error: 'un tunnel porte deja ce nom' })
+    if (taken(tunnelNames(names), name))
+      return res.status(409).json({ error: 'un tunnel porte deja ce nom' })
 
     const peer = endpoint.peers[0]
     const same = existing.find((e) => {
@@ -616,7 +621,7 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
     if (!ep) return res.status(404).json({ error: 'tunnel introuvable' })
 
     const names = readAdminConfig(ADMIN_CONFIG).names
-    if (taken(names, name, wgKey(ep.tag)))
+    if (taken(tunnelNames(names), name, wgKey(ep.tag)))
       return res.status(409).json({ error: 'un tunnel porte deja ce nom' })
 
     const clash = wgEndpoints(cfg)

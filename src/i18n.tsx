@@ -38,6 +38,7 @@ const EN: Record<string, string> = {
     'A unique identifier is generated; removing it is enough to revoke access.',
   'Nom de l’appareil': 'Device name',
   Ajouter: 'Add',
+  'Un appareil porte déjà ce nom.': 'A device already has this name.',
   'Aucun appareil déclaré.': 'No device yet.',
   'sans nom': 'unnamed',
   Révoquer: 'Revoke',
@@ -71,7 +72,8 @@ const EN: Record<string, string> = {
   Modifier: 'Edit',
   'Modifier le tunnel': 'Edit the tunnel',
   'Clé publique du pair': 'Peer public key',
-  'Pair : format attendu hôte:port': 'Peer: expected format host:port',
+  'Format attendu : hôte:port': 'Expected format: host:port',
+  'Un tunnel porte déjà ce nom.': 'A tunnel already has this name.',
   'La clé privée n’est pas modifiée. Pour en changer, supprimez le tunnel et recréez-le.':
     'The private key is left unchanged. To replace it, delete the tunnel and create it again.',
   'Nom du tunnel': 'Tunnel name',

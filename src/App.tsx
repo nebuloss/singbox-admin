@@ -10,12 +10,11 @@ import {
   ErrorModal,
   Field,
   FilledButton,
+  FormModal,
   IconButton,
   LangToggle,
-  Modal,
   Row,
   Switch,
-  TextButton,
   TonalButton,
 } from './ui'
 
@@ -233,38 +232,21 @@ function DevicesTab({
   act: (fn: () => Promise<unknown>) => Promise<void>
 }) {
   const t = useT()
-  const [newName, setNewName] = useState('')
+  const [adding, setAdding] = useState(false)
   const [pending, setPending] = useState<User | null>(null)
   const [renaming, setRenaming] = useState<User | null>(null)
+  const names = (state.users ?? []).map((u) => u.name ?? '')
 
   return (
     <>
-      <Card className="mb-6">
-        <h2 className="mb-1 text-xl leading-7 font-normal">{t('Ajouter un appareil')}</h2>
-        <p className="mb-5 text-sm text-on-surface-variant">
-          {t('Un identifiant unique est généré ; le retirer suffit à révoquer l’accès.')}
-        </p>
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (!newName.trim()) return
-            void act(async () => {
-              await api('/api/users', { method: 'POST', body: JSON.stringify({ name: newName.trim() }) })
-              setNewName('')
-            })
-          }}
-        >
-          <Field label={t('Nom de l’appareil')} value={newName} onChange={setNewName} className="min-w-56 flex-1" />
-          <FilledButton disabled={busy || !newName.trim()}>
-            <Plus /> {t('Ajouter')}
-          </FilledButton>
-        </form>
-      </Card>
-
-      <h2 className="mb-3 px-1 text-sm font-medium tracking-wide text-on-surface-variant uppercase">
-        {t('Appareils')} · {state.users?.length ?? 0}
-      </h2>
+      <div className="mb-3 flex items-center justify-between px-1">
+        <h2 className="text-sm font-medium tracking-wide text-on-surface-variant uppercase">
+          {t('Appareils')} · {state.users?.length ?? 0}
+        </h2>
+        <TonalButton onClick={() => setAdding(true)}>
+          <Plus /> {t('Ajouter')}
+        </TonalButton>
+      </div>
 
       {state.users?.length ? (
         <ul className="flex flex-col gap-4">
@@ -290,9 +272,12 @@ function DevicesTab({
         <Empty>{t('Aucun appareil déclaré.')}</Empty>
       )}
 
+      {adding && <AddDeviceModal names={names} act={act} onClose={() => setAdding(false)} />}
+
       {renaming && (
         <RenameDeviceModal
           user={renaming}
+          names={names}
           act={act}
           onClose={() => setRenaming(null)}
         />
@@ -399,54 +384,94 @@ function UserCard({
   )
 }
 
+/**
+ * Is this name already worn by something else of the same kind? The server
+ * refuses duplicates, and learning that only on submit wastes a round trip and
+ * whatever else was typed. Case-insensitive, to match the server.
+ */
+function nameClash(names: string[], value: string, self?: string): boolean {
+  const norm = (s: string) => s.trim().toLocaleLowerCase()
+  const v = norm(value)
+  return v.length > 0 && v !== norm(self ?? '') && names.some((n) => norm(n) === v)
+}
+
+function AddDeviceModal({
+  names,
+  act,
+  onClose,
+}: {
+  names: string[]
+  act: (fn: () => Promise<unknown>) => Promise<void>
+  onClose: () => void
+}) {
+  const t = useT()
+  const [name, setName] = useState('')
+  const clash = nameClash(names, name)
+
+  return (
+    <FormModal
+      title={t('Ajouter un appareil')}
+      submitLabel={t('Ajouter')}
+      disabled={!name.trim() || clash}
+      onClose={onClose}
+      onSubmit={async () => {
+        await api('/api/users', { method: 'POST', body: JSON.stringify({ name: name.trim() }) })
+        await act(async () => {})
+      }}
+    >
+      <Field
+        label={t('Nom de l’appareil')}
+        value={name}
+        onChange={setName}
+        autoFocus
+        error={clash ? t('Un appareil porte déjà ce nom.') : undefined}
+      />
+      <p className="text-xs text-on-surface-variant">
+        {t('Un identifiant unique est généré ; le retirer suffit à révoquer l’accès.')}
+      </p>
+    </FormModal>
+  )
+}
+
 function RenameDeviceModal({
   user,
+  names,
   act,
   onClose,
 }: {
   user: User
+  names: string[]
   act: (fn: () => Promise<unknown>) => Promise<void>
   onClose: () => void
 }) {
   const t = useT()
   const [name, setName] = useState(user.name ?? '')
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-    setBusy(true)
-    try {
-      await api(`/api/users/${user.uuid}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ name: name.trim() }),
-      })
-      onClose()
-      await act(async () => {})
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const clash = nameClash(names, name, user.name)
 
   return (
-    <Modal title={t('Renommer l’appareil')} onClose={onClose}>
-      <form className="flex flex-col gap-4" onSubmit={submit}>
-        <Field label={t('Nom de l’appareil')} value={name} onChange={setName} autoFocus />
-        <p className="text-xs text-on-surface-variant">
-          {t('L’identifiant ne change pas : un appareil déjà connecté n’est pas coupé, seule l’étiquette portée par le lien change.')}
-        </p>
-        {error && <Banner tone="error">{t(error)}</Banner>}
-        <div className="flex justify-end gap-2">
-          <TextButton onClick={onClose}>{t('Annuler')}</TextButton>
-          <FilledButton disabled={busy || !name.trim() || name.trim() === user.name}>
-            {t('Enregistrer')}
-          </FilledButton>
-        </div>
-      </form>
-    </Modal>
+    <FormModal
+      title={t('Renommer l’appareil')}
+      disabled={!name.trim() || clash || name.trim() === user.name}
+      onClose={onClose}
+      onSubmit={async () => {
+        await api(`/api/users/${user.uuid}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ name: name.trim() }),
+        })
+        await act(async () => {})
+      }}
+    >
+      <Field
+        label={t('Nom de l’appareil')}
+        value={name}
+        onChange={setName}
+        autoFocus
+        error={clash ? t('Un appareil porte déjà ce nom.') : undefined}
+      />
+      <p className="text-xs text-on-surface-variant">
+        {t('L’identifiant ne change pas : un appareil déjà connecté n’est pas coupé, seule l’étiquette portée par le lien change.')}
+      </p>
+    </FormModal>
   )
 }
 
@@ -465,29 +490,13 @@ function WireguardTab({
   const [adding, setAdding] = useState(false)
   const [pending, setPending] = useState<Profile | null>(null)
   const [editing, setEditing] = useState<Profile | null>(null)
-  const [name, setName] = useState('')
-  const [conf, setConf] = useState('')
-  const [formError, setFormError] = useState('')
   const [dragging, setDragging] = useState<number | null>(null)
   const [over, setOver] = useState<number | null>(null)
 
   const profiles = wg?.profiles ?? []
   const on = Boolean(wg?.enabled)
   const firstEnabled = profiles.find((p) => p.enabled)
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setFormError('')
-    try {
-      await api('/api/wireguard', { method: 'POST', body: JSON.stringify({ name, config: conf }) })
-      setName('')
-      setConf('')
-      setAdding(false)
-      await act(async () => {})
-    } catch (err) {
-      setFormError((err as Error).message)
-    }
-  }
+  const names = profiles.map((p) => p.name)
 
   const move = (from: number, to: number) => {
     if (to < 0 || to >= profiles.length) return
@@ -539,7 +548,7 @@ function WireguardTab({
             <span className="ml-2 hidden font-normal normal-case sm:inline">{t('— glissez pour réordonner')}</span>
           )}
         </h2>
-        <TonalButton onClick={() => { setFormError(''); setAdding(true) }}>
+        <TonalButton onClick={() => setAdding(true)}>
           <Plus /> {t('Ajouter')}
         </TonalButton>
       </div>
@@ -647,34 +656,10 @@ function WireguardTab({
         <Empty>{t('Aucun tunnel WireGuard.')}</Empty>
       )}
 
-      {adding && (
-        <Modal title={t('Nouveau tunnel WireGuard')} wide onClose={() => setAdding(false)}>
-          <form className="flex flex-col gap-4" onSubmit={submit}>
-            <Field label={t('Nom du tunnel')} value={name} onChange={setName} autoFocus />
-            <textarea
-              rows={11}
-              value={conf}
-              onChange={(e) => setConf(e.target.value)}
-              spellCheck={false}
-              placeholder={'[Interface]\nPrivateKey = …\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = …\nAllowedIPs = 10.0.0.0/8\nEndpoint = vpn.example.com:51820'}
-              className="w-full resize-y rounded-[var(--radius-md3-m)] border border-outline bg-surface-low p-3 font-mono text-xs leading-relaxed text-on-surface outline-none focus:border-2 focus:border-primary"
-            />
-            <p className="text-xs text-on-surface-variant">
-              {t('Collez la configuration fournie par votre routeur. Seuls les réseaux listés dans')}{' '}
-              <code>AllowedIPs</code>{' '}
-              {t('passeront par le tunnel ; la clé privée n’est jamais réaffichée.')}
-            </p>
-            {formError && <Banner tone="error">{t(formError)}</Banner>}
-            <div className="flex justify-end gap-2">
-              <TextButton onClick={() => setAdding(false)}>{t('Annuler')}</TextButton>
-              <FilledButton disabled={!name.trim() || !conf.trim()}>{t('Ajouter')}</FilledButton>
-            </div>
-          </form>
-        </Modal>
-      )}
+      {adding && <AddTunnelModal names={names} act={act} onClose={() => setAdding(false)} />}
 
       {editing && (
-        <EditTunnelModal profile={editing} act={act} onClose={() => setEditing(null)} />
+        <EditTunnelModal profile={editing} names={names} act={act} onClose={() => setEditing(null)} />
       )}
 
       {pending && (
@@ -704,6 +689,59 @@ function WireguardTab({
   )
 }
 
+function AddTunnelModal({
+  names,
+  act,
+  onClose,
+}: {
+  names: string[]
+  act: (fn: () => Promise<unknown>) => Promise<void>
+  onClose: () => void
+}) {
+  const t = useT()
+  const [name, setName] = useState('')
+  const [conf, setConf] = useState('')
+  const clash = nameClash(names, name)
+
+  return (
+    <FormModal
+      title={t('Nouveau tunnel WireGuard')}
+      submitLabel={t('Ajouter')}
+      wide
+      disabled={!name.trim() || !conf.trim() || clash}
+      onClose={onClose}
+      onSubmit={async () => {
+        await api('/api/wireguard', {
+          method: 'POST',
+          body: JSON.stringify({ name: name.trim(), config: conf }),
+        })
+        await act(async () => {})
+      }}
+    >
+      <Field
+        label={t('Nom du tunnel')}
+        value={name}
+        onChange={setName}
+        autoFocus
+        error={clash ? t('Un tunnel porte déjà ce nom.') : undefined}
+      />
+      <textarea
+        rows={11}
+        value={conf}
+        onChange={(e) => setConf(e.target.value)}
+        spellCheck={false}
+        placeholder={'[Interface]\nPrivateKey = …\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = …\nAllowedIPs = 10.0.0.0/8\nEndpoint = vpn.example.com:51820'}
+        className="w-full resize-y rounded-[var(--radius-md3-m)] border border-outline bg-surface-low p-3 font-mono text-xs leading-relaxed text-on-surface outline-none focus:border-2 focus:border-primary"
+      />
+      <p className="text-xs text-on-surface-variant">
+        {t('Collez la configuration fournie par votre routeur. Seuls les réseaux listés dans')}{' '}
+        <code>AllowedIPs</code>{' '}
+        {t('passeront par le tunnel ; la clé privée n’est jamais réaffichée.')}
+      </p>
+    </FormModal>
+  )
+}
+
 /**
  * Editing a tunnel covers every field except the private key, which the API
  * never returns and this form therefore cannot show. Leaving it alone is the
@@ -711,10 +749,12 @@ function WireguardTab({
  */
 function EditTunnelModal({
   profile,
+  names,
   act,
   onClose,
 }: {
   profile: Profile
+  names: string[]
   act: (fn: () => Promise<unknown>) => Promise<void>
   onClose: () => void
 }) {
@@ -725,61 +765,51 @@ function EditTunnelModal({
   const [address, setAddress] = useState(profile.address.join(', '))
   const [allowedIps, setAllowedIps] = useState(profile.allowedIps.join(', '))
   const [keepalive, setKeepalive] = useState(String(profile.keepalive ?? 25))
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-    // The card shows the peer as host:port, so the form takes it back the same
-    // way rather than splitting it into two fields that read as one.
-    const m = /^\[?([^\]]+?)\]?:(\d+)$/.exec(peer.trim())
-    if (!m) return setError(t('Pair : format attendu hôte:port'))
-
-    setBusy(true)
-    try {
-      await api(`/api/wireguard/${profile.tag}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          name: name.trim(),
-          host: m[1],
-          port: Number(m[2]),
-          publicKey: publicKey.trim(),
-          address,
-          allowedIps,
-          keepalive: Number(keepalive),
-        }),
-      })
-      onClose()
-      await act(async () => {})
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const clash = nameClash(names, name, profile.name)
+  // The card shows the peer as host:port, so the form takes it back the same
+  // way rather than splitting it into two fields that read as one.
+  const parsed = /^\[?([^\]]+?)\]?:(\d+)$/.exec(peer.trim())
+  const peerError = peer.trim() && !parsed ? t('Format attendu : hôte:port') : undefined
 
   return (
-    <Modal title={t('Modifier le tunnel')} wide onClose={onClose}>
-      <form className="flex flex-col gap-4" onSubmit={submit}>
-        <Field label={t('Nom du tunnel')} value={name} onChange={setName} autoFocus />
-        <Field label={t('Pair')} value={peer} onChange={setPeer} />
-        <Field label={t('Clé publique du pair')} value={publicKey} onChange={setPublicKey} />
-        <Field label={t('Adresse dans le tunnel')} value={address} onChange={setAddress} />
-        <Field label={t('Réseaux routés')} value={allowedIps} onChange={setAllowedIps} />
-        <Field label={t('Keepalive')} value={keepalive} onChange={setKeepalive} />
-        <p className="text-xs text-on-surface-variant">
-          {t('La clé privée n’est pas modifiée. Pour en changer, supprimez le tunnel et recréez-le.')}
-        </p>
-        {error && <Banner tone="error">{t(error)}</Banner>}
-        <div className="flex justify-end gap-2">
-          <TextButton onClick={onClose}>{t('Annuler')}</TextButton>
-          <FilledButton disabled={busy || !name.trim() || !peer.trim() || !publicKey.trim()}>
-            {t('Enregistrer')}
-          </FilledButton>
-        </div>
-      </form>
-    </Modal>
+    <FormModal
+      title={t('Modifier le tunnel')}
+      wide
+      disabled={!name.trim() || clash || !parsed || !publicKey.trim()}
+      onClose={onClose}
+      onSubmit={async () => {
+        await api(`/api/wireguard/${profile.tag}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            name: name.trim(),
+            host: parsed![1],
+            port: Number(parsed![2]),
+            publicKey: publicKey.trim(),
+            address,
+            allowedIps,
+            keepalive: Number(keepalive),
+          }),
+        })
+        await act(async () => {})
+      }}
+    >
+      <Field
+        label={t('Nom du tunnel')}
+        value={name}
+        onChange={setName}
+        autoFocus
+        error={clash ? t('Un tunnel porte déjà ce nom.') : undefined}
+      />
+      <Field label={t('Pair')} value={peer} onChange={setPeer} error={peerError} />
+      <Field label={t('Clé publique du pair')} value={publicKey} onChange={setPublicKey} />
+      <Field label={t('Adresse dans le tunnel')} value={address} onChange={setAddress} />
+      <Field label={t('Réseaux routés')} value={allowedIps} onChange={setAllowedIps} />
+      <Field label={t('Keepalive')} value={keepalive} onChange={setKeepalive} />
+      <p className="text-xs text-on-surface-variant">
+        {t('La clé privée n’est pas modifiée. Pour en changer, supprimez le tunnel et recréez-le.')}
+      </p>
+    </FormModal>
   )
 }
 
@@ -900,27 +930,9 @@ function SettingsTab({ state }: { state: State }) {
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
   const [done, setDone] = useState(false)
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-    if (next !== confirm) return setError(t('les deux saisies diffèrent'))
-    setBusy(true)
-    try {
-      await api('/api/password', { method: 'POST', body: JSON.stringify({ current, next }) })
-      setCurrent(''); setNext(''); setConfirm('')
-      setOpen(false)
-      setDone(true)
-      setTimeout(() => setDone(false), 4000)
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const mismatch = confirm.length > 0 && next !== confirm
 
   return (
     <>
@@ -946,26 +958,35 @@ function SettingsTab({ state }: { state: State }) {
               {done ? t('Modifié — les autres sessions ont été fermées.') : t('Accès à cette interface.')}
             </p>
           </div>
-          <TonalButton onClick={() => { setError(''); setOpen(true) }}>{t('Changer')}</TonalButton>
+          <TonalButton onClick={() => setOpen(true)}>{t('Changer')}</TonalButton>
         </div>
       </Card>
 
       {open && (
-        <Modal title={t('Changer le mot de passe')} onClose={() => setOpen(false)}>
-          <form className="flex flex-col gap-4" onSubmit={submit}>
-            <Field label={t('Mot de passe actuel')} type="password" value={current} onChange={setCurrent} autoFocus />
-            <Field label={t('Nouveau mot de passe')} type="password" value={next} onChange={setNext} />
-            <Field label={t('Confirmer')} type="password" value={confirm} onChange={setConfirm} />
-            <p className="text-xs text-on-surface-variant">
-              {t('10 caractères minimum. Les autres sessions seront fermées.')}
-            </p>
-            {error && <Banner tone="error">{t(error)}</Banner>}
-            <div className="flex justify-end gap-2">
-              <TextButton onClick={() => setOpen(false)}>{t('Annuler')}</TextButton>
-              <FilledButton disabled={busy || !current || !next || !confirm}>{t('Enregistrer')}</FilledButton>
-            </div>
-          </form>
-        </Modal>
+        <FormModal
+          title={t('Changer le mot de passe')}
+          disabled={!current || next.length < 10 || mismatch || !confirm}
+          onClose={() => setOpen(false)}
+          onSubmit={async () => {
+            await api('/api/password', { method: 'POST', body: JSON.stringify({ current, next }) })
+            setCurrent(''); setNext(''); setConfirm('')
+            setDone(true)
+            setTimeout(() => setDone(false), 4000)
+          }}
+        >
+          <Field label={t('Mot de passe actuel')} type="password" value={current} onChange={setCurrent} autoFocus />
+          <Field label={t('Nouveau mot de passe')} type="password" value={next} onChange={setNext} />
+          <Field
+            label={t('Confirmer')}
+            type="password"
+            value={confirm}
+            onChange={setConfirm}
+            error={mismatch ? t('les deux saisies diffèrent') : undefined}
+          />
+          <p className="text-xs text-on-surface-variant">
+            {t('10 caractères minimum. Les autres sessions seront fermées.')}
+          </p>
+        </FormModal>
       )}
     </>
   )
