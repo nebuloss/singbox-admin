@@ -47,9 +47,23 @@ export type AdminConfig = {
   tunnels: Names
   /** When each credential was last seen in sing-box's log, ISO 8601. */
   seen: Record<string, string>
+  /**
+   * Sign-in links not yet spent, by token, with their expiry. On disk rather
+   * than in memory so a link can be minted from a shell — which is the case
+   * that matters, since a link made from a session is no help when you have
+   * none. The file is the password's own, and no more readable for it.
+   */
+  links: Record<string, string>
 }
 
-const EMPTY: AdminConfig = { password: null, publicUrl: null, devices: {}, tunnels: {}, seen: {} }
+const EMPTY: AdminConfig = {
+  password: null,
+  publicUrl: null,
+  devices: {},
+  tunnels: {},
+  seen: {},
+  links: {},
+}
 
 /** Format: scrypt$<N>$<salt-hex>$<derived-hex> */
 export function hashPassword(password: string): Password {
@@ -81,7 +95,7 @@ export function readAdminConfig(file: string): AdminConfig {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'))
     if (!parsed || typeof parsed !== 'object') return EMPTY
-    const { password, publicUrl, devices, tunnels, seen } = parsed as Partial<AdminConfig>
+    const { password, publicUrl, devices, tunnels, seen, links } = parsed as Partial<AdminConfig>
     const strings = (v: unknown): Record<string, string> =>
       v && typeof v === 'object' && !Array.isArray(v)
         ? Object.fromEntries(
@@ -104,6 +118,7 @@ export function readAdminConfig(file: string): AdminConfig {
           : {},
       tunnels: strings(tunnels),
       seen: strings(seen),
+      links: strings(links),
     }
   } catch {
     // Missing or unreadable reads as empty: the interface then asks for a
@@ -127,4 +142,38 @@ export function updateAdminConfig(
   const next = change(readAdminConfig(file))
   writeAdminConfig(file, next)
   return next
+}
+
+/**
+ * Mint a sign-in link, dropping any that have expired on the way through.
+ *
+ * Kept here rather than in the server so the command-line tool can make one
+ * too: a link built from a session is no use to someone who has none, which is
+ * the whole reason to want one.
+ */
+export function mintLink(file: string, ttlMs: number): string {
+  const token = crypto.randomUUID()
+  const now = Date.now()
+  updateAdminConfig(file, (c) => ({
+    ...c,
+    links: {
+      ...Object.fromEntries(
+        Object.entries(c.links).filter(([, expiry]) => Date.parse(expiry) > now),
+      ),
+      [token]: new Date(now + ttlMs).toISOString(),
+    },
+  }))
+  return token
+}
+
+/** Spend a link: true once, false ever after, and false for one made up. */
+export function spendLink(file: string, token: string): boolean {
+  let valid = false
+  updateAdminConfig(file, (c) => {
+    const expiry = c.links[token]
+    valid = Boolean(expiry) && Date.parse(expiry) > Date.now()
+    const { [token]: _spent, ...rest } = c.links
+    return { ...c, links: rest }
+  })
+  return valid
 }

@@ -21,6 +21,8 @@ import QRCode from 'qrcode'
 import {
   readAdminConfig,
   updateAdminConfig,
+  mintLink,
+  spendLink,
   type AdminConfig,
   type Device,
   hashPassword,
@@ -744,16 +746,11 @@ app.post('/api/password', requireAuth, (req, res) => {
  * so it lives briefly and dies on first use, whether that use succeeds or not.
  */
 const LINK_TTL = Number(process.env.LINK_MINUTES ?? 10) * 60_000
-const loginLinks = new Map<string, number>()
 
 app.post('/api/session/link', requireAuth, async (req, res) => {
-  const now = Date.now()
-  for (const [token, expiry] of loginLinks) if (expiry < now) loginLinks.delete(token)
-
   // An identifier, like everything else here. A hundred and twenty-two random
   // bits are far past guessing for something that lives ten minutes and once.
-  const token = crypto.randomUUID()
-  loginLinks.set(token, now + LINK_TTL)
+  const token = mintLink(ADMIN_CONFIG, LINK_TTL)
 
   const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0] || req.protocol
   // Built from the address this interface was reached on, not the tunnel's:
@@ -763,11 +760,8 @@ app.post('/api/session/link', requireAuth, async (req, res) => {
 })
 
 app.post('/api/session/claim', (req, res) => {
-  const token = String(req.body?.token ?? '')
-  const expiry = loginLinks.get(token)
   // Spent on sight: a link that failed is a link that is gone.
-  loginLinks.delete(token)
-  if (!expiry || expiry < Date.now())
+  if (!spendLink(ADMIN_CONFIG, String(req.body?.token ?? '')))
     return res.status(401).json({ error: 'lien expire ou deja utilise' })
 
   const session = crypto.randomBytes(32).toString('hex')

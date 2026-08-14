@@ -285,6 +285,22 @@ The interface is available in English and French. It follows the browser's
 preferred language on first visit, and the choice can be changed under
 Settings — it is remembered per browser.
 
+## Signing in on a second device
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/scripts/sign-in-link.sh \
+  | sh -s https://admin.example.com
+```
+
+Prints a link that signs in once, within a few minutes. Settings makes the same
+thing as a QR code when you already have a session — scanning it beats typing a
+long password on a phone, which is where this interface is opened most.
+
+The token travels in the URL fragment, which a browser never sends to a server,
+so it cannot land in an access log or a Referer header the way a query string
+would. It is worth what the password is worth while it lives, so it does not
+live long and is spent on sight — a link that failed is a link that is gone.
+
 ## Lost password
 
 ```sh
