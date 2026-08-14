@@ -165,29 +165,48 @@ Then, on **Nginx Proxy Manager**, open that proxy host and paste this into
 *Advanced → Custom Nginx Configuration*:
 
 ```nginx
-# The secret path, and only it, reaches sing-box.
-location /your-secret-path {
+# The root is served straight from disk: it is the only address a visitor
+# actually asks for, so spare it the round trip.
+location = / {
+  root /data/nginx/decoy;
+  try_files /index.html =404;
+}
+
+# Everything else goes to sing-box, which answers only on the secret path and
+# only to a WebSocket upgrade. The other cases — 404 for a path it does not
+# know, 400 for the right path without an upgrade — are caught below.
+location / {
   proxy_pass http://10.0.0.4:8081;
   proxy_set_header Host $host;
   proxy_set_header X-Real-IP $remote_addr;
   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   proxy_set_header Upgrade $http_upgrade;
-  proxy_set_header Connection "upgrade";
+  proxy_set_header Connection $http_connection;
   proxy_http_version 1.1;
+
   # A tunnel is long-lived: do not cut it after the default 60 seconds.
   proxy_read_timeout 86400s;
   proxy_send_timeout 86400s;
+
+  # 502 and 504 included: with sing-box stopped, the site is still a site.
+  proxy_intercept_errors on;
+  error_page 400 401 403 404 500 502 503 504 = @cover;
 }
 
-# Everything else is the cover page. sing-box is never reached.
-location / {
+location @cover {
   root /data/nginx/decoy;
-  index index.html;
-  try_files $uri $uri/ /index.html;
+  try_files /index.html =404;
 }
 ```
 
-Two things make this work, both worth knowing:
+**The proxy is never told the secret path.** It forwards and lets sing-box
+decide, which buys two things. Probing is uniform — every path returns the same
+200 cover page, including the real one, so there is no status code to sort
+paths by; only a genuine WebSocket upgrade behaves differently, and that needs
+the path *and* a valid UUID. And the path can be regenerated from the interface
+without touching the proxy at all.
+
+Three things worth knowing:
 
 - NPM drops its own default `location /` as soon as it finds one in this field,
   so the block replaces the host's proxy pass instead of colliding with it.
@@ -195,12 +214,17 @@ Two things make this work, both worth knowing:
 - This field lives in NPM's database, so it is written back every time the
   vhost is regenerated. Editing the generated file under
   `/data/nginx/proxy_host/` instead looks like it works, until the next save or
-  certificate renewal silently drops it — taking the WebSocket location with
-  it, and the tunnel along with the cover page.
+  certificate renewal silently drops it.
+- Leave HTTP/2 off on that host: nginx does not implement WebSockets over
+  HTTP/2 ([RFC 8441](https://www.rfc-editor.org/rfc/rfc8441)), so an h2 client
+  would fail the upgrade.
 
-Also leave HTTP/2 off on that host: nginx does not implement WebSockets over
-HTTP/2 ([RFC 8441](https://www.rfc-editor.org/rfc/rfc8441)), so an h2 client
-would fail the upgrade.
+### Regenerating the path
+
+Settings has a button for it. Worth doing when the path may have leaked — from
+a lost device, or a proxy that logged it. It costs every device its link, since
+the path travels in the link, so it is not on a timer: rotation is a response,
+not hygiene.
 
 ## Build from source
 
@@ -269,6 +293,10 @@ proxy that terminates TLS — not to face the internet.
   variable where `systemctl show` or `/proc/<pid>/environ` would expose it
 - The process runs as root because it writes the sing-box configuration and
   drives the service manager
+- The secret path is obfuscation, not authentication: it keeps a scan of the
+  hostname from finding anything, while the UUID is what actually lets a device
+  in. Treat the path as shared secret material — it sits in every client's
+  configuration — and regenerate it if you think it leaked
 - Switching a device off moves it off the public inbound, so it can no longer
   authenticate at all — but it keeps its identity and its link, ready to work
   again the moment you switch it back. Revoking is the permanent cut
