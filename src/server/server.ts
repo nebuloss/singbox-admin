@@ -356,7 +356,8 @@ const list = (v: unknown): string[] =>
  * renaming never touches the sing-box configuration.
  *
  * The prefix is the one thing that does move, when a tunnel is switched on or
- * off — hence retag() below, which carries the references along.
+ * off. Nothing stores the old tag: anything referencing a tunnel is re-pointed
+ * from the id it already names.
  */
 const isWgTag = (tag: string) => tag.startsWith(`${WG_ON}-`) || tag.startsWith(`${WG_OFF}-`)
 const isEnabled = (tag: string) => tag.startsWith(`${WG_ON}-`)
@@ -368,64 +369,6 @@ const newWgId = () => crypto.randomBytes(4).toString('hex')
 const wgKey = (tag: string) => `wg:${wgId(tag)}`
 
 const wgEndpoints = (cfg: Config) => (cfg.endpoints ?? []).filter((e) => isWgTag(e.tag))
-
-/**
- * Move every reference to a tag when that tag changes.
- *
- * Routing rules are rebuilt from scratch elsewhere, but a DNS server can also
- * take a `detour`, and a detour left pointing at the old tag quietly stops
- * resolving through the tunnel.
- */
-function retag(cfg: Config, from: string, to: string) {
-  if (from === to) return
-  for (const server of (cfg.dns?.servers ?? []) as { detour?: string }[]) {
-    if (server.detour === from) server.detour = to
-  }
-}
-
-/**
- * The tunnel currently carrying traffic, if any — counting only a rule that
- * points at a tunnel still present.
- *
- * A rule naming a tag nobody defines is stale — from a hand-edited config —
- * and taking it at face value would report the outbound as on while sing-box
- * refuses to start on exactly that dangling reference.
- */
-function activeTarget(cfg: Config): string | null {
-  const tags = new Set(wgEndpoints(cfg).map((e) => e.tag))
-  const rule = cfg.route?.rules?.find((r) => r.outbound && tags.has(r.outbound))
-  return rule?.outbound ?? null
-}
-
-/**
- * Rebuild routing from the profile order.
- *
- * The first enabled tunnel serves; everything else is left in place but
- * unreferenced. With the outbound switched off, or with no enabled tunnel,
- * there is simply no rule and traffic leaves directly — which is also how the
- * UI derives the global switch, so no extra state is stored anywhere.
- */
-function applyRouting(cfg: Config, on: boolean) {
-  cfg.route = cfg.route ?? {}
-  cfg.route.rules = (cfg.route.rules ?? []).filter(
-    (r) => !(r.outbound && isWgTag(r.outbound)) && r.action !== 'resolve',
-  )
-
-  if (!on) return
-  const first = wgEndpoints(cfg).find((e) => isEnabled(e.tag))
-  if (!first) return
-
-  // Routing matches on the destination address, and a client sends a name.
-  // Without resolving first, an ip_cidr rule cannot match and the connection
-  // leaves by `direct` — which is how internal names ended up unreachable even
-  // once they resolved correctly. The resolver has to be named here too: left
-  // implicit, this action does not use default_domain_resolver.
-  const resolver = dnsFor(cfg, first)?.tag
-  if (resolver) cfg.route.rules.push({ action: 'resolve', server: resolver })
-
-  // Route exactly what the peer accepts, so a split tunnel stays split.
-  cfg.route.rules.push({ ip_cidr: first.peers?.[0]?.allowed_ips ?? [], outbound: first.tag })
-}
 
 /**
  * DNS follows the tunnel.
@@ -457,28 +400,86 @@ function setTunnelDns(cfg: Config, ep: Endpoint, server: string | null) {
   if (server) cfg.dns.servers.push({ type: 'udp', tag, server, detour: ep.tag })
 }
 
-function applyDns(cfg: Config, on: boolean) {
+/**
+ * The tunnel currently carrying traffic, if any — counting only a rule that
+ * points at a tunnel still present.
+ *
+ * A rule naming a tag nobody defines is stale, from a hand-edited config, and
+ * taking it at face value would report the outbound as on while sing-box
+ * refuses to start on exactly that dangling reference.
+ */
+function activeTarget(cfg: Config): string | null {
+  const tags = new Set(wgEndpoints(cfg).map((e) => e.tag))
+  const rule = cfg.route?.rules?.find((r) => r.outbound && tags.has(r.outbound))
+  return rule?.outbound ?? null
+}
+
+/**
+ * Everything derived from the tunnel list, rebuilt in one pass.
+ *
+ * Routing and DNS are one decision, not two: the rule that sends traffic into
+ * a tunnel and the resolver that tells it where to go have to name the same
+ * tunnel, or names resolve one way and connect another. Keeping them in
+ * separate functions meant calling them in the right order at six call sites,
+ * and getting it wrong twice.
+ *
+ * `on` is the outbound switch. It has to come from the caller: it is encoded in
+ * the very rules this rebuilds, so it must be read before anything changes —
+ * which is what withTunnels() below is for.
+ */
+function applyTunnelState(cfg: Config, on: boolean) {
   cfg.dns = cfg.dns ?? {}
   cfg.route = cfg.route ?? {}
-  const servers = cfg.dns.servers ?? []
   const live = wgEndpoints(cfg)
+  const byId = new Map(live.map((e) => [wgId(e.tag), e]))
 
-  // Ours only survive as long as their tunnel does, and their detour follows
-  // the tag when a tunnel is switched on or off.
-  cfg.dns.servers = servers.filter(
-    (d) => !isOurDns(d.tag) || live.some((e) => wgId(e.tag) === dnsIdOf(d.tag!)),
+  // Our DNS entries live as long as their tunnel does. Any detour naming a
+  // tunnel — ours or hand-written — is re-pointed at that tunnel's current
+  // tag, which is how switching one on or off carries its references along.
+  cfg.dns.servers = (cfg.dns.servers ?? []).filter(
+    (d) => !isOurDns(d.tag) || byId.has(dnsIdOf(d.tag!)),
   )
   for (const d of cfg.dns.servers) {
-    if (!isOurDns(d.tag)) continue
-    const ep = live.find((e) => wgId(e.tag) === dnsIdOf(d.tag!))
+    const ep = d.detour && isWgTag(d.detour) ? byId.get(wgId(d.detour)) : undefined
     if (ep) d.detour = ep.tag
   }
 
+  cfg.route.rules = (cfg.route.rules ?? []).filter(
+    (r) => !(r.outbound && isWgTag(r.outbound)) && r.action !== 'resolve',
+  )
+
   const serving = on ? live.find((e) => isEnabled(e.tag)) : undefined
-  const ours = serving ? dnsFor(cfg, serving) : undefined
+  const resolver = serving ? dnsFor(cfg, serving) : undefined
+
+  if (serving) {
+    // Routing matches on the destination address, and a client sends a name.
+    // Without resolving first, an ip_cidr rule cannot match and the connection
+    // leaves by `direct` — which is how internal names stayed unreachable even
+    // once they resolved correctly. The resolver has to be named here too:
+    // left implicit, this action does not use default_domain_resolver.
+    if (resolver?.tag) cfg.route.rules.push({ action: 'resolve', server: resolver.tag })
+    // Route exactly what the peer accepts, so a split tunnel stays split.
+    cfg.route.rules.push({ ip_cidr: serving.peers?.[0]?.allowed_ips ?? [], outbound: serving.tag })
+  }
+
+  // With no tunnel serving, fall back to a resolver that answers rather than
+  // pointing at one only reachable through a tunnel that is off.
   const fallback = cfg.dns.servers.find((d) => !isOurDns(d.tag))?.tag
-  const chosen = ours?.tag ?? fallback
+  const chosen = resolver?.tag ?? fallback
   if (chosen) cfg.route.default_domain_resolver = { server: chosen }
+}
+
+/**
+ * The only way tunnels are ever written: read the outbound state, apply the
+ * change, rebuild what follows from it. The order is the whole point — the
+ * state is encoded in the rules being rebuilt, so reading it afterwards reads
+ * the rebuild, not the intent.
+ */
+async function withTunnels(cfg: Config, change: () => void, force?: boolean): Promise<void> {
+  const on = force ?? activeTarget(cfg) !== null
+  change()
+  applyTunnelState(cfg, on)
+  await commit(cfg)
 }
 
 function wireguardSummary(cfg: Config, names: Names) {
@@ -800,15 +801,11 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
         error: `ce tunnel est deja configure sous le nom : ${names[wgKey(same.tag)] ?? wgId(same.tag)}`,
       })
 
-    cfg.endpoints = [...(cfg.endpoints ?? []), endpoint]
-    // The DNS line of the pasted configuration, if it had one.
-    setTunnelDns(cfg, endpoint, dns)
-
-    // Rebuild routing from the resulting order, keeping the current mode.
-    applyRouting(cfg, activeTarget(cfg) !== null)
-    applyDns(cfg, activeTarget(cfg) !== null)
-
-    await commit(cfg)
+    await withTunnels(cfg, () => {
+      cfg.endpoints = [...(cfg.endpoints ?? []), endpoint]
+      // The DNS line of the pasted configuration, if it had one.
+      setTunnelDns(cfg, endpoint, dns)
+    })
     updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [wgKey(endpoint.tag)]: name } }))
     res.json({ ok: true, tag: endpoint.tag })
   } catch (e) {
@@ -873,12 +870,10 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
     peer.allowed_ips = allowedIps
     peer.persistent_keepalive_interval = Number.isInteger(keepalive) && keepalive > 0 ? keepalive : 25
 
-    setTunnelDns(cfg, ep, dns || null)
+    // AllowedIPs and the resolver both feed what gets rebuilt, so a change to
+    // either is worth a write — and nothing else is.
     if (JSON.stringify([ep.address, peer, dns || null]) !== before) {
-      // AllowedIPs feeds the routing rule, so rebuild it, keeping the mode.
-      applyRouting(cfg, activeTarget(cfg) !== null)
-      applyDns(cfg, activeTarget(cfg) !== null)
-      await commit(cfg)
+      await withTunnels(cfg, () => setTunnelDns(cfg, ep, dns || null))
     }
     updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [wgKey(ep.tag)]: name } }))
     res.json({ ok: true, tag: ep.tag })
@@ -895,11 +890,10 @@ app.post('/api/wireguard/order', requireAuth, async (req, res) => {
     if (tags.length !== wgs.length || !tags.every((t) => wgs.some((e) => e.tag === t)))
       return res.status(400).json({ error: 'liste de profils incoherente' })
 
-    const others = (cfg.endpoints ?? []).filter((e) => !isWgTag(e.tag))
-    cfg.endpoints = [...others, ...tags.map((t) => wgs.find((e) => e.tag === t)!)]
-    applyRouting(cfg, activeTarget(cfg) !== null)
-    applyDns(cfg, activeTarget(cfg) !== null)
-    await commit(cfg)
+    await withTunnels(cfg, () => {
+      const others = (cfg.endpoints ?? []).filter((e) => !isWgTag(e.tag))
+      cfg.endpoints = [...others, ...tags.map((t) => wgs.find((e) => e.tag === t)!)]
+    })
     res.json({ ok: true })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -912,9 +906,7 @@ app.post('/api/wireguard/enabled', requireAuth, async (req, res) => {
     const on = Boolean(req.body?.enabled)
     if (on && !wgEndpoints(cfg).some((e) => isEnabled(e.tag)))
       return res.status(400).json({ error: 'aucun tunnel actif a utiliser' })
-    applyRouting(cfg, on)
-    applyDns(cfg, on)
-    await commit(cfg)
+    await withTunnels(cfg, () => {}, on)
     res.json({ ok: true })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -927,15 +919,9 @@ app.post('/api/wireguard/:tag/enabled', requireAuth, async (req, res) => {
     const ep = (cfg.endpoints ?? []).find((e) => e.tag === req.params.tag)
     if (!ep) return res.status(404).json({ error: 'tunnel introuvable' })
 
-    const wasOn = activeTarget(cfg) !== null
-    const before = ep.tag
-    ep.tag = withState(ep.tag, Boolean(req.body?.enabled))
-    // Only the prefix moved, but a DNS detour naming the old tag would stop
-    // resolving through the tunnel. The id — and so the name — is untouched.
-    retag(cfg, before, ep.tag)
-    applyRouting(cfg, wasOn)
-    applyDns(cfg, wasOn)
-    await commit(cfg)
+    await withTunnels(cfg, () => {
+      ep.tag = withState(ep.tag, Boolean(req.body?.enabled))
+    })
     res.json({ ok: true, tag: ep.tag })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -949,13 +935,11 @@ app.delete('/api/wireguard/:tag', requireAuth, async (req, res) => {
     if (!cfg.endpoints?.some((e) => e.tag === tag))
       return res.status(404).json({ error: 'profil introuvable' })
 
-    const wasOn = activeTarget(cfg) !== null
-    cfg.endpoints = cfg.endpoints.filter((e) => e.tag !== tag)
     // Routing is rebuilt from what remains: a rule pointing at a deleted
     // endpoint is rejected by sing-box outright.
-    applyRouting(cfg, wasOn)
-    applyDns(cfg, wasOn)
-    await commit(cfg)
+    await withTunnels(cfg, () => {
+      cfg.endpoints = (cfg.endpoints ?? []).filter((e) => e.tag !== tag)
+    })
     updateAdminConfig(ADMIN_CONFIG, (s) => {
       const { [wgKey(tag)]: _gone, ...rest } = s.names
       return { ...s, names: rest }
