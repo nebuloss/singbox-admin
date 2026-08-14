@@ -1,0 +1,31 @@
+{
+  "name": "singbox-admin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal web admin for a sing-box VLESS tunnel: manage client UUIDs and hand out connection links as QR codes.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.server.json && vite build",
+    "start": "node dist-server/server.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/cookie-parser": "^1.4.7",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.2",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.4.5",
+    "vite": "^6.0.0"
+  }
+}

@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+/* Material Design 3 tokens.
+   Tailwind 4 emits utilities as var() references, so redefining the same
+   variables under prefers-color-scheme below flips the whole theme without
+   duplicating a single utility class. Palette is a teal seed (#006874). */
+@theme {
+  --color-primary: #006874;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #97f0ff;
+  --color-on-primary-container: #001f24;
+
+  --color-secondary: #4a6267;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #cde7ec;
+  --color-on-secondary-container: #051f23;
+
+  --color-tertiary: #525e7d;
+  --color-on-tertiary: #ffffff;
+  --color-tertiary-container: #dae2ff;
+  --color-on-tertiary-container: #0e1b37;
+
+  --color-error: #ba1a1a;
+  --color-on-error: #ffffff;
+  --color-error-container: #ffdad6;
+  --color-on-error-container: #410002;
+
+  --color-surface: #f5fafb;
+  --color-on-surface: #171d1e;
+  --color-surface-variant: #dbe4e6;
+  --color-on-surface-variant: #3f484a;
+
+  --color-surface-lowest: #ffffff;
+  --color-surface-low: #eff5f6;
+  --color-surface-container: #e9eff0;
+  --color-surface-high: #e3e9ea;
+  --color-surface-highest: #dee3e5;
+
+  --color-outline: #6f797a;
+  --color-outline-variant: #bfc8ca;
+
+  /* MD3 shape scale */
+  --radius-md3-xs: 4px;
+  --radius-md3-s: 8px;
+  --radius-md3-m: 12px;
+  --radius-md3-l: 16px;
+  --radius-md3-xl: 28px;
+  --radius-md3-full: 9999px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-primary: #4fd8eb;
+    --color-on-primary: #00363d;
+    --color-primary-container: #004f58;
+    --color-on-primary-container: #97f0ff;
+
+    --color-secondary: #b1cbd0;
+    --color-on-secondary: #1c3438;
+    --color-secondary-container: #334b4f;
+    --color-on-secondary-container: #cde7ec;
+
+    --color-tertiary: #bac6ea;
+    --color-on-tertiary: #24304d;
+    --color-tertiary-container: #3b4664;
+    --color-on-tertiary-container: #dae2ff;
+
+    --color-error: #ffb4ab;
+    --color-on-error: #690005;
+    --color-error-container: #93000a;
+    --color-on-error-container: #ffdad6;
+
+    --color-surface: #0e1415;
+    --color-on-surface: #dee3e5;
+    --color-surface-variant: #3f484a;
+    --color-on-surface-variant: #bfc8ca;
+
+    --color-surface-lowest: #090f10;
+    --color-surface-low: #171d1e;
+    --color-surface-container: #1b2122;
+    --color-surface-high: #252b2c;
+    --color-surface-highest: #303637;
+
+    --color-outline: #899294;
+    --color-outline-variant: #3f484a;
+  }
+}
+
+html {
+  color-scheme: light dark;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* MD3 state layers: interaction is expressed as a translucent overlay of the
+   content colour, not by swapping the background. 8% hover, 12% pressed. */
+@utility state-layer {
+  position: relative;
+  isolation: isolate;
+}
+@utility state-layer {
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: currentColor;
+    opacity: 0;
+    transition: opacity 150ms cubic-bezier(0.2, 0, 0, 1);
+    pointer-events: none;
+  }
+  &:hover::after { opacity: 0.08; }
+  &:active::after { opacity: 0.12; }
+}
