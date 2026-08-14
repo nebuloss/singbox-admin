@@ -91,7 +91,7 @@ Pushing a `v*` tag builds and publishes a release through GitHub Actions.
 
 | variable | default | meaning |
 |---|---|---|
-| `ADMIN_PASSWORD` | — | interface password; without it the app starts read-only |
+| `ADMIN_PASSWORD` | — | initial password, hashed at install and then discarded |
 | `PUBLIC_HOST` | `example.com` | hostname clients connect to, used to build links |
 | `PUBLIC_PORT` | `443` | port clients connect to |
 | `SINGBOX_CONFIG` | `/etc/sing-box/config.json` | configuration file to manage |
@@ -99,8 +99,16 @@ Pushing a `v*` tag builds and publishes a release through GitHub Actions.
 | `APP_PORT` | `3000` | port the interface listens on |
 | `APP_DIR` | `/opt/singbox-admin` | install directory |
 
-The password can also be changed from the interface, which rewrites
-`$APP_DIR/.env` so the change survives a restart.
+The password can also be changed from the interface.
+
+## Lost password
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/scripts/reset-password.sh | sh
+```
+
+Run on the host, it writes a new hash and restarts the service. Without an
+argument it generates a password and prints it; pass one to choose it.
 
 ## Security model
 
@@ -112,7 +120,10 @@ proxy that terminates TLS — not to face the internet.
 - The session cookie is `httpOnly`, `sameSite=strict` and `secure`, so the app
   requires HTTPS in front of it
 - Changing the password drops every other session
-- Passwords are hashed before comparison and compared in constant time
+- The password is stored only as a scrypt hash, in `auth.json` (mode 600).
+  `ADMIN_PASSWORD` is a bootstrap value: it is hashed at install and never
+  written to disk in clear text, nor passed to the service as an environment
+  variable where `systemctl show` or `/proc/<pid>/environ` would expose it
 - The process runs as root because it writes the sing-box configuration and
   drives the service manager
 

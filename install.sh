@@ -97,16 +97,27 @@ info "Dependances de production…"
 cd "$APP_DIR"
 npm ci --omit=dev --prefer-offline --quiet 2>&1 | tail -3 || npm install --omit=dev --quiet 2>&1 | tail -3
 
-# ── Service ───────────────────────────────────────────────────────────────────
-if [ -z "$ADMIN_PASSWORD" ] && [ ! -f "$APP_DIR/.env" ]; then
-  warn "ADMIN_PASSWORD non fourni : l'interface demarrera en lecture seule"
-fi
+# ── Credentials ───────────────────────────────────────────────────────────────
+# The password is hashed here and only the hash is stored. It is never written
+# to disk in clear text, and never handed to the service as an environment
+# variable — where it would show up in `systemctl show` or /proc/<pid>/environ.
+NODE_BIN=$(command -v node)
+
 if [ -n "$ADMIN_PASSWORD" ]; then
-  printf 'ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD" > "$APP_DIR/.env"
-  chmod 600 "$APP_DIR/.env"
+  "$NODE_BIN" "$APP_DIR/dist-server/reset-password.js" "$ADMIN_PASSWORD" >/dev/null \
+    && info "Mot de passe hache dans $APP_DIR/auth.json"
+elif [ -f "$APP_DIR/auth.json" ]; then
+  info "Mot de passe existant conserve"
+else
+  warn "Aucun mot de passe : l'interface demarrera en lecture seule"
+  warn "En definir un : $NODE_BIN $APP_DIR/dist-server/reset-password.js"
 fi
 
-NODE_BIN=$(command -v node)
+# A previous version stored the password in clear text here.
+if [ -f "$APP_DIR/.env" ]; then
+  rm -f "$APP_DIR/.env"
+  warn "Ancien .env (mot de passe en clair) supprime"
+fi
 
 if [ "$OS" = alpine ]; then
   cat > "/etc/init.d/$SERVICE_NAME" <<EOF
@@ -127,7 +138,6 @@ start_pre() {
     export PORT=$APP_PORT NODE_ENV=production
     export SINGBOX_CONFIG="$SINGBOX_CONFIG" SINGBOX_SERVICE="$SINGBOX_SERVICE"
     export PUBLIC_HOST="$PUBLIC_HOST" PUBLIC_PORT="$PUBLIC_PORT"
-    [ -f "$APP_DIR/.env" ] && . "$APP_DIR/.env" && export ADMIN_PASSWORD
     touch /var/log/\${RC_SVCNAME}.log
 }
 EOF
@@ -143,7 +153,6 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$APP_DIR
-EnvironmentFile=-$APP_DIR/.env
 Environment=PORT=$APP_PORT NODE_ENV=production
 Environment=SINGBOX_CONFIG=$SINGBOX_CONFIG SINGBOX_SERVICE=$SINGBOX_SERVICE
 Environment=PUBLIC_HOST=$PUBLIC_HOST PUBLIC_PORT=$PUBLIC_PORT

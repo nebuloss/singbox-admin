@@ -17,6 +17,7 @@ import os from 'os'
 import crypto from 'crypto'
 import { execFile } from 'child_process'
 import QRCode from 'qrcode'
+import { readAuth, writeAuth, verifyPassword } from './auth'
 
 const app = express()
 app.set('trust proxy', 1)
@@ -28,11 +29,15 @@ const CONFIG_PATH = process.env.SINGBOX_CONFIG ?? '/etc/sing-box/config.json'
 const SERVICE = process.env.SINGBOX_SERVICE ?? 'sing-box'
 const PUBLIC_HOST = process.env.PUBLIC_HOST ?? 'example.com'
 const PUBLIC_PORT = Number(process.env.PUBLIC_PORT ?? 443)
-// Mutable: the password can be changed from the UI, which rewrites ENV_FILE so
-// the new value survives a restart. install.sh writes that same file.
-const ENV_FILE = process.env.ENV_FILE ?? path.join(__dirname, '..', '.env')
-let adminPassword = process.env.ADMIN_PASSWORD ?? ''
-const readOnly = () => !adminPassword
+// The password lives hashed in AUTH_FILE. ADMIN_PASSWORD is only a bootstrap
+// value: on first start it is hashed into that file and never read again.
+const AUTH_FILE = process.env.AUTH_FILE ?? path.join(__dirname, '..', 'auth.json')
+let auth = readAuth(AUTH_FILE)
+if (!auth && process.env.ADMIN_PASSWORD) {
+  auth = writeAuth(AUTH_FILE, process.env.ADMIN_PASSWORD)
+  console.log(`mot de passe initial hache dans ${AUTH_FILE}`)
+}
+const readOnly = () => auth === null
 
 // ── Types kept deliberately loose: we only touch the users array and leave the
 //    rest of the sing-box config untouched, whatever it contains.
@@ -106,21 +111,14 @@ function authed(req: express.Request): boolean {
   return typeof t === 'string' && sessions.has(t)
 }
 
-/** Constant-time comparison that tolerates differing lengths. */
-function passwordMatches(given: string, expected: string): boolean {
-  const a = crypto.createHash('sha256').update(given).digest()
-  const b = crypto.createHash('sha256').update(expected).digest()
-  return crypto.timingSafeEqual(a, b)
-}
-
 function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   if (!authed(req)) return res.status(401).json({ error: 'authentification requise' })
   next()
 }
 
 app.post('/api/login', (req, res) => {
-  if (readOnly()) return res.status(503).json({ error: 'ADMIN_PASSWORD non defini' })
-  if (!passwordMatches(String(req.body?.password ?? ''), adminPassword))
+  if (!auth) return res.status(503).json({ error: 'aucun mot de passe configure' })
+  if (!verifyPassword(String(req.body?.password ?? ''), auth.hash))
     return res.status(401).json({ error: 'mot de passe incorrect' })
 
   const token = crypto.randomBytes(32).toString('hex')
@@ -132,17 +130,16 @@ app.post('/api/login', (req, res) => {
 app.post('/api/password', requireAuth, (req, res) => {
   const current = String(req.body?.current ?? '')
   const next = String(req.body?.next ?? '')
-  if (!passwordMatches(current, adminPassword))
+  if (!auth || !verifyPassword(current, auth.hash))
     return res.status(401).json({ error: 'mot de passe actuel incorrect' })
   if (next.length < 10) return res.status(400).json({ error: '10 caracteres minimum' })
   if (next === current) return res.status(400).json({ error: 'identique a l actuel' })
 
   try {
-    fs.writeFileSync(ENV_FILE, `ADMIN_PASSWORD=${next}\n`, { mode: 0o600 })
+    auth = writeAuth(AUTH_FILE, next)
   } catch (e) {
     return res.status(500).json({ error: `ecriture impossible : ${(e as Error).message}` })
   }
-  adminPassword = next
 
   // Every other session is dropped: a password change should evict anyone who
   // authenticated with the old one. The caller keeps its own cookie.
@@ -222,5 +219,5 @@ app.use(express.static(distDir))
 app.get('*', (_req, res) => res.sendFile(path.join(distDir, 'index.html')))
 
 app.listen(PORT, () => {
-  console.log(`singbox-admin on :${PORT} — config ${CONFIG_PATH}${readOnly() ? ' (ADMIN_PASSWORD absent)' : ''}`)
+  console.log(`singbox-admin on :${PORT} — config ${CONFIG_PATH}${readOnly() ? ' (aucun mot de passe : lecture seule)' : ''}`)
 })
