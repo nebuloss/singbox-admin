@@ -18,7 +18,17 @@ import {
   TonalButton,
 } from './ui'
 
-export type User = { uuid: string; name?: string; link: string; sub: string; qr: string; enabled: boolean }
+export type User = {
+  token: string
+  name?: string
+  link: string
+  sub: string
+  qr: string
+  enabled: boolean
+  /** How many credentials this device currently holds — more than one means a
+   *  replacement is in flight, waiting for the old one to fall out of use. */
+  credentials: number
+}
 export type Profile = {
   tag: string
   name: string
@@ -255,14 +265,14 @@ function DevicesTab({
         <ul className="flex flex-col gap-4">
           {state.users.map((u) => (
             <UserCard
-              key={u.uuid}
+              key={u.token}
               user={u}
               busy={busy}
               onRename={() => setRenaming(u)}
               onRevoke={() => setPending(u)}
               onToggle={(v) =>
                 void act(() =>
-                  api(`/api/users/${u.uuid}/enabled`, {
+                  api(`/api/users/${u.token}/enabled`, {
                     method: 'POST',
                     body: JSON.stringify({ enabled: v }),
                   }),
@@ -293,15 +303,15 @@ function DevicesTab({
           confirmLabel={t('Révoquer')}
           body={
             <>
-              <strong className="text-on-surface">{pending.name ?? pending.uuid.slice(0, 8)}</strong>{' '}
+              <strong className="text-on-surface">{pending.name ?? pending.token.slice(0, 8)}</strong>{' '}
               {t('perdra immédiatement l’accès au tunnel. Son lien et son QR code cesseront de fonctionner. Cette action est irréversible : un nouvel identifiant sera généré si vous le rajoutez.')}
             </>
           }
           onClose={() => setPending(null)}
           onConfirm={() => {
-            const uuid = pending.uuid
+            const token = pending.token
             setPending(null)
-            void act(() => api(`/api/users/${uuid}`, { method: 'DELETE' }))
+            void act(() => api(`/api/users/${token}`, { method: 'DELETE' }))
           }}
         />
       )}
@@ -382,8 +392,9 @@ function UserCard({
               <div className="flex items-center gap-2">
                 <p className="truncate text-lg leading-6 font-medium">{user.name ?? t('sans nom')}</p>
                 {!user.enabled && <Chip>{t('désactivé')}</Chip>}
+                {user.credentials > 1 && <Chip>{t('identifiant en cours de renouvellement')}</Chip>}
               </div>
-              <p className="mt-0.5 font-mono text-xs text-on-surface-variant">{user.uuid.slice(0, 13)}…</p>
+              <p className="mt-0.5 font-mono text-xs text-on-surface-variant">{user.token.slice(0, 13)}…</p>
             </div>
             <div className="flex shrink-0 items-center gap-1">
               <IconButton label={t('Renommer')} onClick={onRename}>
@@ -393,7 +404,7 @@ function UserCard({
                 <path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
               </IconButton>
               <Switch
-                label={`${t('Activer')} ${user.name ?? user.uuid.slice(0, 8)}`}
+                label={`${t('Activer')} ${user.name ?? user.token.slice(0, 8)}`}
                 checked={user.enabled}
                 disabled={busy}
                 onChange={onToggle}
@@ -493,7 +504,7 @@ function RenameDeviceModal({
       disabled={!name.trim() || clash || name.trim() === user.name}
       onClose={onClose}
       onSubmit={async () => {
-        await api(`/api/users/${user.uuid}`, {
+        await api(`/api/users/${user.token}`, {
           method: 'PATCH',
           body: JSON.stringify({ name: name.trim() }),
         })

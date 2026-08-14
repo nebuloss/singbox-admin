@@ -20,6 +20,8 @@ import QRCode from 'qrcode'
 import {
   readAdminConfig,
   updateAdminConfig,
+  type AdminConfig,
+  type Device,
   hashPassword,
   verifyPassword,
   type Names,
@@ -60,14 +62,26 @@ if (!readAdminConfig(ADMIN_CONFIG).publicUrl && BOOTSTRAP_HOST && BOOTSTRAP_HOST
   console.log(`adresse publique initialisee a ${seeded}`)
 }
 
+// How often a device is asked to come back for its profile, and therefore how
+// often its credential is replaced. The sweep retires a predecessor once it has
+// gone quiet, so these bound a credential's life without needing to guess how
+// long a device might be asleep.
+const REFRESH_HOURS = Number(process.env.REFRESH_HOURS ?? 1)
+const ROTATE_EVERY = Number(process.env.ROTATE_MINUTES ?? 10) * 60_000
+const IDLE_RETIRE = Number(process.env.RETIRE_IDLE_MINUTES ?? 15) * 60_000
+const SWEEP_EVERY = Number(process.env.SWEEP_SECONDS ?? 60) * 1_000
+
 const credential = () => readAdminConfig(ADMIN_CONFIG).password
 const readOnly = () => credential() === null
 
 // ── Types kept deliberately loose: we only touch the users array and leave the
 //    rest of the sing-box config untouched, whatever it contains.
-// A UUID and nothing else: what sing-box needs to authenticate a device, and
-// all it is ever told. The readable name lives in our own config.json, keyed by UUID.
-type User = { uuid: string }
+// The credential, and its own identifier as a name. The name is not a display
+// name — it never changes and no rename touches it — but sing-box logs it, and
+// logs nothing useful without it: with no name it prints the array index, which
+// shifts as soon as the list does. Naming each credential after itself is what
+// makes the log say which credential was used.
+type User = { uuid: string; name: string }
 type Inbound = {
   type?: string
   tag?: string
@@ -88,6 +102,7 @@ type Endpoint = { type: string; tag: string; address: string[]; private_key: str
 type Rule = { ip_cidr?: string[]; outbound?: string; action?: string; server?: string }
 type DnsServer = { type?: string; tag?: string; server?: string; detour?: string }
 type Config = {
+  log?: { output?: string; [k: string]: unknown }
   inbounds?: Inbound[]
   endpoints?: Endpoint[]
   outbounds?: unknown[]
@@ -173,6 +188,22 @@ const allUsers = (cfg: Config) => [
 ]
 
 /**
+ * Which inbound holds a device — the shelf if it is suspended, the public one
+ * otherwise. A device's credentials always travel together: they are the same
+ * device, and half of one on each shelf would mean half suspended.
+ */
+function homeOf(cfg: Config, uuids: string[]): Inbound | undefined {
+  const parked = parkedInbound(cfg)
+  if (parked?.users?.some((u) => uuids.includes(u.uuid))) return parked
+  const live = liveInbound(cfg)
+  return live.users?.some((u) => uuids.includes(u.uuid)) ? live : undefined
+}
+
+const dropUuids = (inbound: Inbound | undefined, uuids: string[]) => {
+  if (inbound?.users) inbound.users = inbound.users.filter((u) => !uuids.includes(u.uuid))
+}
+
+/**
  * Write the config, verify it with `sing-box check`, restart the service.
  * On any failure the previous file is restored, so a bad edit can never leave
  * the tunnel down.
@@ -193,6 +224,16 @@ async function commit(cfg: Config): Promise<void> {
     throw new Error(`configuration refusee par sing-box : ${check.out}`)
   }
 
+  // Reload, not restart. sing-box rebuilds its instance in place on SIGHUP:
+  // the process survives, established transfers keep running, and a change to
+  // the user list takes effect at once — measured, and the reason a credential
+  // can be replaced often enough to be worth replacing at all. Restarting is
+  // kept as the fallback for a service manager that cannot reload.
+  const reload = await run('rc-service', [SERVICE, 'reload'])
+  if (reload.ok) return
+  const sdReload = await run('systemctl', ['reload', SERVICE])
+  if (sdReload.ok) return
+
   const restart = await run('rc-service', [SERVICE, 'restart'])
   if (!restart.ok) {
     const sd = await run('systemctl', ['restart', SERVICE])
@@ -200,8 +241,8 @@ async function commit(cfg: Config): Promise<void> {
   }
 }
 
-function linkFor(user: User, name: string | undefined, wsPath: string, base: PublicBase): string {
-  const label = encodeURIComponent(name || user.uuid.slice(0, 8))
+function linkFor(uuid: string, name: string | undefined, wsPath: string, base: PublicBase): string {
+  const label = encodeURIComponent(name || uuid.slice(0, 8))
   const q = new URLSearchParams({
     encryption: 'none',
     security: 'tls',
@@ -209,7 +250,7 @@ function linkFor(user: User, name: string | undefined, wsPath: string, base: Pub
     type: 'ws',
     path: wsPath,
   })
-  return `vless://${user.uuid}@${base.host}:${base.port}?${q}#${label}`
+  return `vless://${uuid}@${base.host}:${base.port}?${q}#${label}`
 }
 
 /**
@@ -224,7 +265,7 @@ function linkFor(user: User, name: string | undefined, wsPath: string, base: Pub
  * rather than resolving them itself; a client in TUN mode may do the latter,
  * and then its own resolver has to be pointed at the tunnel's.
  */
-function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase) {
+function clientProfile(uuid: string, cfg: Config, wsPath: string, base: PublicBase) {
   const serving = wgEndpoints(cfg).find((e) => isEnabled(e.tag))
   const internal = serving?.peers?.[0]?.allowed_ips ?? []
 
@@ -255,7 +296,7 @@ function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase
         tag: 'proxy',
         server: base.host,
         server_port: base.port,
-        uuid: user.uuid,
+        uuid,
         tls: { enabled: true, server_name: base.host },
         transport: { type: 'ws', path: wsPath },
       },
@@ -432,8 +473,8 @@ const wgId = (tag: string) => tag.slice(tag.indexOf('-') + 1)
 const withState = (tag: string, on: boolean) => `${on ? WG_ON : WG_OFF}-${wgId(tag)}`
 const newWgId = () => crypto.randomBytes(4).toString('hex')
 
-/** How a display name is filed for a tunnel, stable across on/off. */
-const wgKey = (tag: string) => `wg:${wgId(tag)}`
+/** How a display name is filed for a tunnel: by its id, stable across on/off. */
+const wgKey = (tag: string) => wgId(tag)
 
 const wgEndpoints = (cfg: Config) => (cfg.endpoints ?? []).filter((e) => isWgTag(e.tag))
 
@@ -549,13 +590,13 @@ async function withTunnels(cfg: Config, change: () => void, force?: boolean): Pr
   await commit(cfg)
 }
 
-function wireguardSummary(cfg: Config, names: Names) {
+function wireguardSummary(cfg: Config, tunnels: Names) {
   const profiles = wgEndpoints(cfg).map((e) => {
     const peer = e.peers?.[0]
     // The private key is never returned.
     return {
       tag: e.tag,
-      name: names[wgKey(e.tag)] ?? wgId(e.tag),
+      name: tunnels[wgKey(e.tag)] ?? wgId(e.tag),
       enabled: isEnabled(e.tag),
       address: e.address,
       peer: peer ? `${peer.address}:${peer.port}` : null,
@@ -658,32 +699,31 @@ app.get('/api/state', async (req, res) => {
     const version = (await run('sing-box', ['version'])).out.split('\n')[0] ?? ''
     const status = await run('rc-service', [SERVICE, 'status'])
 
-    // Suspended devices keep the public link — it is what makes them work
-    // again the moment they are put back.
-    const names = readAdminConfig(ADMIN_CONFIG).names
+    const admin = readAdminConfig(ADMIN_CONFIG)
     const base = publicBase(req)
-    const describe = async (u: User, enabled: boolean) => {
-      const name = names[u.uuid]
-      const link = linkFor(u, name, wsPath, base)
-      const sub = `${base.origin}/${u.uuid}`
-      // What the QR carries. Both Hiddify and the official sing-box client
-      // register this scheme and read url and name out of it, so a scan
-      // installs the profile instead of dropping the operator into a form.
-      const label = name || u.uuid.slice(0, 8)
-      const imp = `sing-box://import-remote-profile?url=${encodeURIComponent(sub)}#${encodeURIComponent(label)}`
-      return {
-        uuid: u.uuid,
-        name,
-        link,
-        sub,
-        enabled,
-        qr: await QRCode.toString(imp, { type: 'svg', margin: 1 }),
-      }
-    }
-    const users = await Promise.all([
-      ...(inbound.users ?? []).map((u) => describe(u, true)),
-      ...(parkedInbound(cfg)?.users ?? []).map((u) => describe(u, false)),
-    ])
+    const live = new Set((inbound.users ?? []).map((u) => u.uuid))
+    const users = await Promise.all(
+      Object.entries(admin.devices).map(async ([token, d]) => {
+        const current = d.uuids[0]
+        const sub = `${base.origin}/${token}`
+        const label = d.name || token.slice(0, 8)
+        // What the QR carries. Both Hiddify and the official sing-box client
+        // register this scheme and read url and name out of it, so a scan
+        // installs the profile instead of dropping the operator into a form.
+        const imp = `sing-box://import-remote-profile?url=${encodeURIComponent(sub)}#${encodeURIComponent(label)}`
+        return {
+          token,
+          name: d.name,
+          // Suspended devices keep their address and their link: it is what
+          // makes them work again the moment they are put back.
+          enabled: live.has(current),
+          sub,
+          link: linkFor(current, d.name, wsPath, base),
+          credentials: d.uuids.length,
+          qr: await QRCode.toString(imp, { type: 'svg', margin: 1 }),
+        }
+      }),
+    )
     res.json({
       authed: true,
       users,
@@ -691,7 +731,7 @@ app.get('/api/state', async (req, res) => {
       tunnel: { host: base.host, port: base.port, path: wsPath },
       publicUrl: readAdminConfig(ADMIN_CONFIG).publicUrl,
       proxySnippet: proxySnippet(cfg, PUBLIC_PORT_LISTEN),
-      wireguard: wireguardSummary(cfg, names),
+      wireguard: wireguardSummary(cfg, admin.tunnels),
     })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
@@ -700,52 +740,92 @@ app.get('/api/state', async (req, res) => {
 
 // Letters of any script, so an accented or non-Latin name is not "invalid".
 const NAME_RE = /^[\p{L}\p{N} ._@()'’-]{1,40}$/u
-// Devices and tunnels are named in the same file but not in the same space:
-// two devices may not share a name, a device and a tunnel may.
-const deviceNames = (names: Names) => Object.entries(names).filter(([k]) => !k.startsWith('wg:'))
-const tunnelNames = (names: Names) => Object.entries(names).filter(([k]) => k.startsWith('wg:'))
 
 const taken = (entries: [string, string][], name: string, except?: string) =>
   entries.some(([k, v]) => k !== except && v.toLocaleLowerCase() === name.toLocaleLowerCase())
+
+const deviceEntries = (admin: AdminConfig): [string, string][] =>
+  Object.entries(admin.devices).map(([token, d]) => [token, d.name])
+
+/**
+ * Replace a device's credential, keeping the old one alive.
+ *
+ * The device is not here to be told: it will learn the new credential when it
+ * next fetches its profile, and until then the old one has to keep working.
+ * Retirement is left to the sweep, which drops a predecessor once nothing has
+ * used it for a while — so a credential's life is bounded by its use, not by a
+ * guess at how long a device might be asleep.
+ *
+ * Rate-limited: a device that fetches its profile in a loop must not grow the
+ * credential list without bound.
+ */
+async function rotate(token: string, device: Device): Promise<string> {
+  const now = Date.now()
+  const last = device.rotated ? Date.parse(device.rotated) : 0
+  if (Number.isFinite(last) && now - last < ROTATE_EVERY) return device.uuids[0]
+
+  const fresh = crypto.randomUUID()
+  const cfg = readConfig()
+  const home = homeOf(cfg, device.uuids) ?? liveInbound(cfg)
+  home.users = [...(home.users ?? []), { uuid: fresh, name: fresh }]
+  await commit(cfg)
+
+  updateAdminConfig(ADMIN_CONFIG, (c) => {
+    const d = c.devices[token]
+    if (!d) return c
+    return {
+      ...c,
+      devices: {
+        ...c.devices,
+        [token]: { ...d, uuids: [fresh, ...d.uuids], rotated: new Date(now).toISOString() },
+      },
+    }
+  })
+  return fresh
+}
 
 app.post('/api/users', requireAuth, async (req, res) => {
   const name = String(req.body?.name ?? '').trim()
   if (!NAME_RE.test(name)) return res.status(400).json({ error: 'nom invalide' })
   try {
-    const names = readAdminConfig(ADMIN_CONFIG).names
-    if (taken(deviceNames(names), name))
+    const admin = readAdminConfig(ADMIN_CONFIG)
+    if (taken(deviceEntries(admin), name))
       return res.status(409).json({ error: 'ce nom existe deja' })
 
+    const token = crypto.randomUUID()
     const uuid = crypto.randomUUID()
     const cfg = readConfig()
-    // sing-box is told the UUID and nothing else; the name is ours to keep.
-    liveInbound(cfg).users!.push({ uuid })
+    liveInbound(cfg).users!.push({ uuid, name: uuid })
     await commit(cfg)
-    updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [uuid]: name } }))
-    res.json({ ok: true })
+    updateAdminConfig(ADMIN_CONFIG, (c) => ({
+      ...c,
+      devices: { ...c.devices, [token]: { name, uuids: [uuid] } },
+    }))
+    res.json({ ok: true, token })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
   }
 })
 
-app.delete('/api/users/:uuid', requireAuth, async (req, res) => {
+app.delete('/api/users/:token', requireAuth, async (req, res) => {
   try {
-    const cfg = readConfig()
-    if (!allUsers(cfg).some((u) => u.uuid === req.params.uuid))
-      return res.status(404).json({ error: 'inconnu' })
-    if (allUsers(cfg).length === 1)
+    const admin = readAdminConfig(ADMIN_CONFIG)
+    const device = admin.devices[req.params.token]
+    if (!device) return res.status(404).json({ error: 'inconnu' })
+    if (Object.keys(admin.devices).length === 1)
       return res.status(400).json({ error: 'refus : cela supprimerait le dernier acces' })
 
-    const drop = (i: Inbound | undefined) => {
-      if (i?.users) i.users = i.users.filter((u) => u.uuid !== req.params.uuid)
-    }
-    drop(liveInbound(cfg))
-    drop(parkedInbound(cfg))
-
+    const cfg = readConfig()
+    dropUuids(liveInbound(cfg), device.uuids)
+    dropUuids(parkedInbound(cfg), device.uuids)
     await commit(cfg)
-    updateAdminConfig(ADMIN_CONFIG, (s) => {
-      const { [req.params.uuid]: _gone, ...rest } = s.names
-      return { ...s, names: rest }
+
+    updateAdminConfig(ADMIN_CONFIG, (c) => {
+      const { [req.params.token]: _gone, ...devices } = c.devices
+      const seen = Object.fromEntries(
+        Object.entries(c.seen).filter(([uuid]) => !device.uuids.includes(uuid)),
+      )
+      return { ...c, devices, seen }
     })
     res.json({ ok: true })
   } catch (e) {
@@ -753,83 +833,46 @@ app.delete('/api/users/:uuid', requireAuth, async (req, res) => {
   }
 })
 
-/**
- * Renaming writes names.json and stops there — no configuration rewrite, no
- * `sing-box check`, no service restart, so nobody loses their connection over
- * a label. That is the whole reason sing-box is only ever told the UUID.
- */
-app.patch('/api/users/:uuid', requireAuth, (req, res) => {
+/** Renaming writes our own file and stops there — see the note on names. */
+app.patch('/api/users/:token', requireAuth, (req, res) => {
   const name = String(req.body?.name ?? '').trim()
   if (!NAME_RE.test(name)) return res.status(400).json({ error: 'nom invalide' })
   try {
-    if (!allUsers(readConfig()).some((u) => u.uuid === req.params.uuid))
-      return res.status(404).json({ error: 'inconnu' })
-
-    const names = readAdminConfig(ADMIN_CONFIG).names
-    if (taken(deviceNames(names), name, req.params.uuid))
+    const admin = readAdminConfig(ADMIN_CONFIG)
+    if (!admin.devices[req.params.token]) return res.status(404).json({ error: 'inconnu' })
+    if (taken(deviceEntries(admin), name, req.params.token))
       return res.status(409).json({ error: 'ce nom existe deja' })
 
-    updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [req.params.uuid]: name } }))
+    updateAdminConfig(ADMIN_CONFIG, (c) => ({
+      ...c,
+      devices: { ...c.devices, [req.params.token]: { ...c.devices[req.params.token], name } },
+    }))
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
   }
 })
 
-app.post('/api/users/:uuid/enabled', requireAuth, async (req, res) => {
+app.post('/api/users/:token/enabled', requireAuth, async (req, res) => {
   try {
+    const admin = readAdminConfig(ADMIN_CONFIG)
+    const device = admin.devices[req.params.token]
+    if (!device) return res.status(404).json({ error: 'inconnu' })
+
     const cfg = readConfig()
-    const live = liveInbound(cfg)
-    const parked = parkedInbound(cfg)
     const wanted = Boolean(req.body?.enabled)
+    const from = wanted ? parkedInbound(cfg) : liveInbound(cfg)
+    const moving = (from?.users ?? []).filter((u) => device.uuids.includes(u.uuid))
+    if (!moving.length) return res.json({ ok: true })
 
-    const from = wanted ? parked : live
-    const user = from?.users?.find((u) => u.uuid === req.params.uuid)
-    // Already on the right shelf, or unknown — tell the two apart.
-    if (!user) {
-      const exists = allUsers(cfg).some((u) => u.uuid === req.params.uuid)
-      if (!exists) return res.status(404).json({ error: 'inconnu' })
-      return res.json({ ok: true })
-    }
-
-    from!.users = from!.users!.filter((u) => u.uuid !== req.params.uuid)
-    ;(wanted ? live : shelf(cfg)).users!.push(user)
+    dropUuids(from, device.uuids)
+    const to = wanted ? liveInbound(cfg) : shelf(cfg)
+    to.users = [...(to.users ?? []), ...moving]
 
     await commit(cfg)
     res.json({ ok: true })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
-  }
-})
-
-/**
- * Draw a new secret path.
- *
- * Worth doing when the old one may have leaked — from a lost device, or a
- * proxy that logged it. It costs every device its link, since the path travels
- * in the link, so nothing here does it on a timer: rotation is a response, not
- * hygiene.
- *
- * The reverse proxy is deliberately not consulted. It forwards everything and
- * lets sing-box decide, so the path is known here and nowhere else.
- */
-app.post('/api/settings', requireAuth, (req, res) => {
-  const raw = String(req.body?.publicUrl ?? '').trim()
-  if (raw) {
-    let url: URL
-    try {
-      url = new URL(raw)
-    } catch {
-      return res.status(400).json({ error: 'adresse invalide' })
-    }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:')
-      return res.status(400).json({ error: 'adresse invalide' })
-  }
-  try {
-    updateAdminConfig(ADMIN_CONFIG, (c) => ({ ...c, publicUrl: raw ? raw.replace(/\/+$/, '') : null }))
-    res.json({ ok: true })
-  } catch (e) {
-    res.status(500).json({ error: `ecriture impossible : ${(e as Error).message}` })
   }
 })
 
@@ -856,7 +899,7 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     const name = String(req.body?.name ?? '').trim()
     if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
 
-    const names = readAdminConfig(ADMIN_CONFIG).names
+    const tunnels = readAdminConfig(ADMIN_CONFIG).tunnels
     const { endpoint, dns } = parseWireguard(String(req.body?.config ?? ''))
     endpoint.tag = `${WG_ON}-${newWgId()}`
 
@@ -867,7 +910,7 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     // same name, and the same peer pasted under a different name. The second
     // is the one that actually bites — a duplicate would sit in the list doing
     // nothing, since only the first enabled one ever serves.
-    if (taken(tunnelNames(names), name))
+    if (taken(Object.entries(tunnels), name))
       return res.status(409).json({ error: 'un tunnel porte deja ce nom' })
 
     const peer = endpoint.peers[0]
@@ -879,7 +922,7 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
     // variable part, so the interface can translate the fixed half of it.
     if (same)
       return res.status(409).json({
-        error: `ce tunnel est deja configure sous le nom : ${names[wgKey(same.tag)] ?? wgId(same.tag)}`,
+        error: `ce tunnel est deja configure sous le nom : ${tunnels[wgKey(same.tag)] ?? wgId(same.tag)}`,
       })
 
     await withTunnels(cfg, () => {
@@ -887,7 +930,7 @@ app.post('/api/wireguard', requireAuth, async (req, res) => {
       // The DNS line of the pasted configuration, if it had one.
       setTunnelDns(cfg, endpoint, dns)
     })
-    updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [wgKey(endpoint.tag)]: name } }))
+    updateAdminConfig(ADMIN_CONFIG, (c) => ({ ...c, tunnels: { ...c.tunnels, [wgKey(endpoint.tag)]: name } }))
     res.json({ ok: true, tag: endpoint.tag })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -921,8 +964,8 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
     const ep = wgEndpoints(cfg).find((e) => e.tag === req.params.tag)
     if (!ep) return res.status(404).json({ error: 'tunnel introuvable' })
 
-    const names = readAdminConfig(ADMIN_CONFIG).names
-    if (taken(tunnelNames(names), name, wgKey(ep.tag)))
+    const tunnels = readAdminConfig(ADMIN_CONFIG).tunnels
+    if (taken(Object.entries(tunnels), name, wgKey(ep.tag)))
       return res.status(409).json({ error: 'un tunnel porte deja ce nom' })
 
     const clash = wgEndpoints(cfg)
@@ -933,7 +976,7 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
       })
     if (clash)
       return res.status(409).json({
-        error: `ce tunnel est deja configure sous le nom : ${names[wgKey(clash.tag)] ?? wgId(clash.tag)}`,
+        error: `ce tunnel est deja configure sous le nom : ${tunnels[wgKey(clash.tag)] ?? wgId(clash.tag)}`,
       })
 
     // Absent means "leave it alone"; empty means "clear it". Treating the two
@@ -962,7 +1005,7 @@ app.patch('/api/wireguard/:tag', requireAuth, async (req, res) => {
     if (JSON.stringify([ep.address, peer, nextDns]) !== before) {
       await withTunnels(cfg, () => setTunnelDns(cfg, ep, nextDns))
     }
-    updateAdminConfig(ADMIN_CONFIG, (s) => ({ ...s, names: { ...s.names, [wgKey(ep.tag)]: name } }))
+    updateAdminConfig(ADMIN_CONFIG, (c) => ({ ...c, tunnels: { ...c.tunnels, [wgKey(ep.tag)]: name } }))
     res.json({ ok: true, tag: ep.tag })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -1027,36 +1070,11 @@ app.delete('/api/wireguard/:tag', requireAuth, async (req, res) => {
     await withTunnels(cfg, () => {
       cfg.endpoints = (cfg.endpoints ?? []).filter((e) => e.tag !== tag)
     })
-    updateAdminConfig(ADMIN_CONFIG, (s) => {
-      const { [wgKey(tag)]: _gone, ...rest } = s.names
-      return { ...s, names: rest }
+    updateAdminConfig(ADMIN_CONFIG, (c) => {
+      const { [wgKey(tag)]: _gone, ...rest } = c.tunnels
+      return { ...c, tunnels: rest }
     })
     res.json({ ok: true })
-  } catch (e) {
-    res.status(500).json({ error: String((e as Error).message) })
-  }
-})
-
-/**
- * The profile itself. Deliberately outside the session: the UUID in the path is
- * the same credential the link carries, so a device that can use one can fetch
- * the other, and nothing else can.
- */
-app.get(`/:uuid(${UUID_PATH})`, (req, res) => {
-  try {
-    const cfg = readConfig()
-    const user = allUsers(cfg).find((u) => u.uuid === req.params.uuid)
-    if (!user) return res.status(404).json({ error: 'inconnu' })
-
-    const wsPath = liveInbound(cfg).transport?.path ?? '/'
-    // The name belongs in a header, not in the configuration: sing-box rejects
-    // any key it does not know, and clients read the title from here.
-    const name = readAdminConfig(ADMIN_CONFIG).names[user.uuid] ?? user.uuid.slice(0, 8)
-    res.set('profile-title', `base64:${Buffer.from(name, 'utf8').toString('base64')}`)
-    res.set('profile-update-interval', '24')
-    res.type('application/json').send(
-      JSON.stringify(clientProfile(user, cfg, wsPath, publicBase(req)), null, 2),
-    )
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
   }
@@ -1112,21 +1130,25 @@ publicApp.disable('x-powered-by')
 
 publicApp.get('/', (_req, res) => res.type('html').send(LANDING))
 
-publicApp.get(`/:uuid(${UUID_PATH})`, (req, res) => {
+publicApp.get(`/:token(${UUID_PATH})`, async (req, res) => {
   try {
-    const cfg = readConfig()
-    const user = allUsers(cfg).find((u) => u.uuid === req.params.uuid)
-    // An identifier nobody holds is answered exactly like any other address:
-    // there is no reply that says "not this one".
-    if (!user) return res.status(404).type('html').send(NOT_FOUND)
+    const device = readAdminConfig(ADMIN_CONFIG).devices[req.params.token]
+    // A token nobody holds is answered exactly like any other address: there
+    // is no reply that says "not this one".
+    if (!device) return res.status(404).type('html').send(NOT_FOUND)
 
+    // Fetching a profile is the one moment a device is listening, so it is
+    // when a credential is replaced: it leaves with the new one in hand.
+    const uuid = await rotate(req.params.token, device)
+
+    const cfg = readConfig()
     const wsPath = liveInbound(cfg).transport?.path ?? '/'
-    const name = readAdminConfig(ADMIN_CONFIG).names[user.uuid] ?? user.uuid.slice(0, 8)
+    const name = device.name || req.params.token.slice(0, 8)
     res.set('profile-title', `base64:${Buffer.from(name, 'utf8').toString('base64')}`)
-    res.set('profile-update-interval', '24')
+    res.set('profile-update-interval', String(REFRESH_HOURS))
     res
       .type('application/json')
-      .send(JSON.stringify(clientProfile(user, cfg, wsPath, publicBase(req)), null, 2))
+      .send(JSON.stringify(clientProfile(uuid, cfg, wsPath, publicBase(req)), null, 2))
   } catch {
     res.status(404).type('html').send(NOT_FOUND)
   }
@@ -1137,6 +1159,115 @@ publicApp.use((_req, res) => res.status(404).type('html').send(NOT_FOUND))
 publicApp.listen(PUBLIC_PORT_LISTEN, () => {
   console.log(`vitrine publique on :${PUBLIC_PORT_LISTEN} — profils et page de couverture`)
 })
+
+/**
+ * Who is still using which credential.
+ *
+ * sing-box names the credential in every connection line — that is the whole
+ * reason each one is named after itself. Reading the log costs nothing and adds
+ * no surface: no extra listener, no counters to reconcile across reloads.
+ *
+ * A predecessor is retired once nothing has used it for a while. The current
+ * credential is never retired, however quiet: a device may simply be asleep,
+ * and it is the one thing that would lock it out for good.
+ */
+let logOffset = 0
+
+function observeLog(): Record<string, string> {
+  const seen: Record<string, string> = {}
+  try {
+    const path = readConfig().log?.output
+    if (!path) return seen
+    const size = fs.statSync(path).size
+    // Truncated or rotated: start over rather than read from beyond the end.
+    if (size < logOffset) logOffset = 0
+    if (size === logOffset) return seen
+    const fd = fs.openSync(path, 'r')
+    const buf = Buffer.alloc(size - logOffset)
+    fs.readSync(fd, buf, 0, buf.length, logOffset)
+    fs.closeSync(fd)
+    logOffset = size
+    const now = new Date().toISOString()
+    for (const m of buf.toString('utf8').matchAll(/\[([0-9a-fA-F-]{36})\]/g)) seen[m[1]] = now
+  } catch {
+    // A missing or unreadable log only means no news, never a reason to retire.
+  }
+  return seen
+}
+
+async function sweep(): Promise<void> {
+  const fresh = observeLog()
+  const now = Date.now()
+
+  const stale: string[] = []
+  updateAdminConfig(ADMIN_CONFIG, (c) => {
+    const seen = { ...c.seen, ...fresh }
+    for (const device of Object.values(c.devices)) {
+      for (const uuid of device.uuids.slice(1)) {
+        const last = seen[uuid] ? Date.parse(seen[uuid]) : 0
+        if (now - last > IDLE_RETIRE) stale.push(uuid)
+      }
+    }
+    if (!stale.length) return { ...c, seen }
+    return {
+      ...c,
+      seen: Object.fromEntries(Object.entries(seen).filter(([u]) => !stale.includes(u))),
+      devices: Object.fromEntries(
+        Object.entries(c.devices).map(([token, d]) => [
+          token,
+          { ...d, uuids: d.uuids.filter((u) => !stale.includes(u)) },
+        ]),
+      ),
+    }
+  })
+
+  if (!stale.length) return
+  const cfg = readConfig()
+  dropUuids(liveInbound(cfg), stale)
+  dropUuids(parkedInbound(cfg), stale)
+  await commit(cfg)
+  console.log(`identifiants retires faute d usage : ${stale.length}`)
+}
+
+/**
+ * Take in credentials this app did not create.
+ *
+ * The install script writes the first one, and a configuration may be edited by
+ * hand. Without this they would exist for sing-box and be invisible here — no
+ * name, no link, no way to revoke them from the interface, which is the worst
+ * of both worlds.
+ */
+function adopt(): void {
+  const cfg = readConfig()
+  const known = new Set(
+    Object.values(readAdminConfig(ADMIN_CONFIG).devices).flatMap((d) => d.uuids),
+  )
+  const orphans = allUsers(cfg)
+    .map((u) => u.uuid)
+    .filter((uuid) => !known.has(uuid))
+  if (!orphans.length) return
+
+  updateAdminConfig(ADMIN_CONFIG, (c) => ({
+    ...c,
+    devices: {
+      ...c.devices,
+      ...Object.fromEntries(
+        orphans.map((uuid) => [uuid, { name: `appareil ${uuid.slice(0, 8)}`, uuids: [uuid] }]),
+      ),
+    },
+  }))
+  console.log(`identifiants adoptes : ${orphans.length}`)
+}
+
+try {
+  adopt()
+} catch (e) {
+  console.error('adoption:', (e as Error).message)
+}
+
+setInterval(() => {
+  void sweep().catch((e) => console.error('balayage:', (e as Error).message))
+}, SWEEP_EVERY)
 
 // ── SPA. __dirname is dist-server/ at runtime, so the bundle sits in ../dist.
 const distDir = path.join(__dirname, '..', 'dist')

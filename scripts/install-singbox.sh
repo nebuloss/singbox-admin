@@ -23,7 +23,6 @@ export PATH
 # ── Settings, all overridable from the environment ───────────────────────────
 CONFIG="${CONFIG:-/etc/sing-box/config.json}"
 LISTEN_PORT="${LISTEN_PORT:-8081}"
-FIRST_CLIENT="${FIRST_CLIENT:-premier-appareil}"
 # WS_PATH defaults to a random one, generated only when writing a new config.
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
@@ -108,7 +107,7 @@ write_config() {
       "listen": "::",
       "listen_port": ${LISTEN_PORT},
       "users": [
-        { "uuid": "${uuid}", "name": "${FIRST_CLIENT}" }
+        { "uuid": "${uuid}", "name": "${uuid}" }
       ],
       "transport": { "type": "ws", "path": "${ws_path}" }
     }
@@ -145,7 +144,18 @@ command_args="run -c $CONFIG"
 command_background=true
 pidfile="/run/\${RC_SVCNAME}.pid"
 
+extra_started_commands="reload"
+
 depend() { need net; after firewall; }
+
+# sing-box rebuilds its instance in place on SIGHUP: the process survives and
+# established transfers keep running, so a change to the user list applies
+# without cutting anyone off.
+reload() {
+    ebegin "Reloading \${RC_SVCNAME}"
+    sing-box check -c $CONFIG && start-stop-daemon --signal HUP --pidfile "\$pidfile"
+    eend \$?
+}
 EOF
       chmod +x /etc/init.d/sing-box
     fi
@@ -161,6 +171,8 @@ After=network-online.target
 [Service]
 Type=simple
 ExecStart=$(command -v sing-box) run -c $CONFIG
+# In place, so a change to the user list does not cut anyone off.
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
 RestartSec=5
 LimitNOFILE=65535

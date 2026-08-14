@@ -70,6 +70,7 @@ const EN: Record<string, string> = {
   'Glisser pour réordonner': 'Drag to reorder',
   'en service': 'in use',
   désactivé: 'disabled',
+  'identifiant en cours de renouvellement': 'credential being replaced',
   Monter: 'Move up',
   Descendre: 'Move down',
   Activer: 'Enable',

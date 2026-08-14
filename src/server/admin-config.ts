@@ -26,13 +26,30 @@ const KEYLEN = 64
 const COST = 16384 // scrypt N; ~100ms on modest hardware
 
 export type Password = { hash: string; updated: string }
-/** Keyed by device UUID, or `wg:<id>` for a tunnel — identifiers that never change. */
+/** Display names by identifier — identifiers that never change. */
 export type Names = Record<string, string>
-/** Where devices should fetch their profile, when that is not where the
- *  interface itself answers — see the note on subscriptions in the README. */
-export type AdminConfig = { password: Password | null; names: Names; publicUrl: string | null }
+/**
+ * A device, as this app sees it.
+ *
+ * `token` (the key) is what the subscription URL carries and never changes.
+ * `uuids` are the credentials sing-box knows, newest first: the head is what a
+ * profile is served with, the rest are predecessors kept alive only as long as
+ * something is still using them. Splitting the two is what lets a credential
+ * be replaced without changing the address a device fetches from.
+ */
+export type Device = { name: string; uuids: string[]; rotated?: string }
 
-const EMPTY: AdminConfig = { password: null, names: {}, publicUrl: null }
+export type AdminConfig = {
+  password: Password | null
+  publicUrl: string | null
+  devices: Record<string, Device>
+  /** Tunnel display names, by tunnel id. */
+  tunnels: Names
+  /** When each credential was last seen in sing-box's log, ISO 8601. */
+  seen: Record<string, string>
+}
+
+const EMPTY: AdminConfig = { password: null, publicUrl: null, devices: {}, tunnels: {}, seen: {} }
 
 /** Format: scrypt$<N>$<salt-hex>$<derived-hex> */
 export function hashPassword(password: string): Password {
@@ -64,18 +81,29 @@ export function readAdminConfig(file: string): AdminConfig {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'))
     if (!parsed || typeof parsed !== 'object') return EMPTY
-    const { password, names, publicUrl } = parsed as Partial<AdminConfig>
+    const { password, publicUrl, devices, tunnels, seen } = parsed as Partial<AdminConfig>
+    const strings = (v: unknown): Record<string, string> =>
+      v && typeof v === 'object' && !Array.isArray(v)
+        ? Object.fromEntries(
+            Object.entries(v).filter(
+              (entry): entry is [string, string] => typeof entry[1] === 'string',
+            ),
+          )
+        : {}
     return {
       password: typeof password?.hash === 'string' ? password : null,
       publicUrl: typeof publicUrl === 'string' && publicUrl ? publicUrl : null,
-      names:
-        names && typeof names === 'object' && !Array.isArray(names)
+      devices:
+        devices && typeof devices === 'object' && !Array.isArray(devices)
           ? Object.fromEntries(
-              Object.entries(names).filter(
-                (entry): entry is [string, string] => typeof entry[1] === 'string',
+              Object.entries(devices).filter(
+                (entry): entry is [string, Device] =>
+                  Boolean(entry[1]) && Array.isArray((entry[1] as Device).uuids),
               ),
             )
           : {},
+      tunnels: strings(tunnels),
+      seen: strings(seen),
     }
   } catch {
     // Missing or unreadable reads as empty: the interface then asks for a
