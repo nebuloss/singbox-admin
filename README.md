@@ -102,7 +102,22 @@ TLS is not handled here on purpose: the inbound speaks plain WebSocket and
 expects a reverse proxy in front of it to terminate HTTPS on 443 and forward
 the secret path, so certificate renewal stays where it already works.
 
-### 2. The admin interface
+### 2. A cover page, if the reverse proxy is Nginx Proxy Manager
+
+```sh
+DOMAIN=cdn.example.com WS_PATH=/your-secret-path UPSTREAM=10.0.0.4:8081 \
+  sh scripts/install-decoy.sh
+```
+
+A hostname that answers 404, or shows a reverse-proxy banner, is a signal. This
+serves an ordinary static page at `/` and forwards only the secret path to
+sing-box, so a browser or a scanner finds a boring site.
+
+Re-run it after saving that host in the NPM interface: NPM regenerates the
+vhost from its database, which drops anything added by hand — including the
+WebSocket location, so the tunnel itself.
+
+### 3. The admin interface
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/install.sh \
