@@ -110,22 +110,30 @@ elif [ -f "$APP_DIR/auth.json" ]; then
   info "Mot de passe existant conserve"
 elif [ -f "$APP_DIR/.env" ]; then
   # Upgrade from a version that kept the password in clear text: hash the one
-  # already in use rather than silently leaving the interface locked.
+  # already in use rather than silently leaving the interface unclaimed.
   OLD=$(sed -n 's/^ADMIN_PASSWORD=//p' "$APP_DIR/.env" | head -1)
   if [ -n "$OLD" ]; then
     "$NODE_BIN" "$APP_DIR/dist-server/reset-password.js" "$OLD" >/dev/null \
       && info "Mot de passe existant migre vers un hachage"
   fi
   unset OLD
-else
-  warn "Aucun mot de passe : l'interface demarrera en lecture seule"
-  warn "En definir un : $NODE_BIN $APP_DIR/dist-server/reset-password.js"
 fi
 
 # A previous version stored the password in clear text here.
 if [ -f "$APP_DIR/.env" ]; then
   rm -f "$APP_DIR/.env"
   warn "Ancien .env (mot de passe en clair) supprime"
+fi
+
+# Check the outcome rather than which branch ran: an empty or password-less
+# .env satisfies [ -f ] but yields nothing to migrate, and the interface would
+# then come up unclaimed — anyone reaching it could set the password.
+if [ ! -f "$APP_DIR/auth.json" ]; then
+  warn "AUCUN MOT DE PASSE DEFINI"
+  warn "L'interface demarre en mode premiere configuration : le premier"
+  warn "visiteur choisira le mot de passe. A faire tout de suite, ou definir"
+  warn "un mot de passe des maintenant :"
+  warn "  $NODE_BIN $APP_DIR/dist-server/reset-password.js 'votre mot de passe'"
 fi
 
 if [ "$OS" = alpine ]; then
