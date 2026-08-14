@@ -410,6 +410,35 @@ app.delete('/api/users/:uuid', requireAuth, async (req, res) => {
   }
 })
 
+app.patch('/api/users/:uuid', requireAuth, async (req, res) => {
+  const name = String(req.body?.name ?? '').trim()
+  if (!/^[\w .@-]{1,40}$/.test(name)) return res.status(400).json({ error: 'nom invalide' })
+  try {
+    const cfg = readConfig()
+    const inbound = vlessInbound(cfg)
+    const user = inbound.users!.find((u) => u.uuid === req.params.uuid)
+    if (!user) return res.status(404).json({ error: 'inconnu' })
+    if (inbound.users!.some((u) => u.uuid !== user.uuid && u.name === name))
+      return res.status(409).json({ error: 'ce nom existe deja' })
+
+    // The suspension rule matches on the name, so it has to follow the rename —
+    // otherwise a suspended device quietly comes back online under its new one.
+    const disabled = disabledUsers(cfg)
+    if (user.name && disabled.delete(user.name)) {
+      disabled.add(name)
+      applyUserRules(cfg, disabled)
+    }
+    user.name = name
+
+    // The UUID does not change, so the link stays valid and connected devices
+    // are not cut off; only the label carried in the link changes.
+    await commit(cfg)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: String((e as Error).message) })
+  }
+})
+
 app.post('/api/users/:uuid/enabled', requireAuth, async (req, res) => {
   try {
     const cfg = readConfig()

@@ -102,22 +102,7 @@ TLS is not handled here on purpose: the inbound speaks plain WebSocket and
 expects a reverse proxy in front of it to terminate HTTPS on 443 and forward
 the secret path, so certificate renewal stays where it already works.
 
-### 2. A cover page, if the reverse proxy is Nginx Proxy Manager
-
-```sh
-DOMAIN=cdn.example.com WS_PATH=/your-secret-path UPSTREAM=10.0.0.4:8081 \
-  sh scripts/install-decoy.sh
-```
-
-A hostname that answers 404, or shows a reverse-proxy banner, is a signal. This
-serves an ordinary static page at `/` and forwards only the secret path to
-sing-box, so a browser or a scanner finds a boring site.
-
-Re-run it after saving that host in the NPM interface: NPM regenerates the
-vhost from its database, which drops anything added by hand — including the
-WebSocket location, so the tunnel itself.
-
-### 3. The admin interface
+### 2. The admin interface
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/install.sh \
@@ -131,6 +116,75 @@ already in use.
 > **Status: early development.** Expect breaking changes between versions
 > rather than migration paths — upgrade by reinstalling and, if the interface
 > comes up asking for a password, set it again.
+
+## A cover page in front of the tunnel
+
+A hostname that answers 404, or shows a reverse-proxy banner, is a signal. It
+costs little to serve an ordinary page at `/` and route only the secret path to
+sing-box, so a browser, a scanner or a curious middlebox finds a boring site.
+
+Put a static file on the proxy host — any plausible, dull page will do:
+
+```sh
+mkdir -p /data/nginx/decoy
+cat > /data/nginx/decoy/index.html <<'HTML'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Static Asset Delivery</title>
+</head>
+<body>
+<main>
+  <h1>Static asset delivery</h1>
+  <p>This host serves cached static resources. There is no browsable index.</p>
+</main>
+</body>
+</html>
+HTML
+```
+
+Then, on **Nginx Proxy Manager**, open that proxy host and paste this into
+*Advanced → Custom Nginx Configuration*:
+
+```nginx
+# The secret path, and only it, reaches sing-box.
+location /your-secret-path {
+  proxy_pass http://10.0.0.4:8081;
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  proxy_http_version 1.1;
+  # A tunnel is long-lived: do not cut it after the default 60 seconds.
+  proxy_read_timeout 86400s;
+  proxy_send_timeout 86400s;
+}
+
+# Everything else is the cover page. sing-box is never reached.
+location / {
+  root /data/nginx/decoy;
+  index index.html;
+  try_files $uri $uri/ /index.html;
+}
+```
+
+Two things make this work, both worth knowing:
+
+- NPM drops its own default `location /` as soon as it finds one in this field,
+  so the block replaces the host's proxy pass instead of colliding with it.
+  Two `location /` in one server block stop nginx from starting.
+- This field lives in NPM's database, so it is written back every time the
+  vhost is regenerated. Editing the generated file under
+  `/data/nginx/proxy_host/` instead looks like it works, until the next save or
+  certificate renewal silently drops it — taking the WebSocket location with
+  it, and the tunnel along with the cover page.
+
+Also leave HTTP/2 off on that host: nginx does not implement WebSockets over
+HTTP/2 ([RFC 8441](https://www.rfc-editor.org/rfc/rfc8441)), so an h2 client
+would fail the upgrade.
 
 ## Build from source
 
