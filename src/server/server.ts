@@ -223,30 +223,20 @@ function linkFor(user: User, name: string | undefined, wsPath: string, base: Pub
  */
 function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase) {
   const serving = wgEndpoints(cfg).find((e) => isEnabled(e.tag))
-  const resolver = serving ? dnsFor(cfg, serving)?.server : undefined
   const internal = serving?.peers?.[0]?.allowed_ips ?? []
 
   return {
     log: { level: 'warn' },
-    // Written in the older DNS form on purpose. Clients ship their own sing-box
-    // and it is rarely the newest: `type`/`domain_resolver` are 1.12 and later,
-    // and a device on 1.11 refuses the whole profile over them. This form is
-    // read by both.
-    dns: {
-      servers: [
-        // Through the proxy, so it answers with what the tunnel can reach.
-        { tag: 'remote', address: resolver ?? '1.1.1.1', detour: 'proxy' },
-        // The device's own resolver, whatever the network handed it — used for
-        // one thing only, finding the tunnel. It has to be this rather than a
-        // public address: a captive portal hands you a resolver and blocks the
-        // rest, which is exactly where a tunnel is wanted.
-        { tag: 'local', address: 'local' },
-      ],
-      // The tunnel's own address is resolved without the tunnel. Without this
-      // the lookup needs the proxy it is trying to find, and times out.
-      rules: [{ domain: [base.host], server: 'local' }],
-      final: 'remote',
-    },
+    // No DNS section, deliberately.
+    //
+    // Clients ship their own sing-box and it is rarely the version this host
+    // runs: the DNS format changed between 1.11, 1.12 and 1.13, and a profile
+    // written for one is refused outright by another — which is how a profile
+    // that validated here failed to import at all. Resolution is also the one
+    // thing every client already has settings for, so it is left to them.
+    //
+    // What the profile does carry is what a client cannot guess: where the
+    // tunnel is, how to speak to it, and which networks belong behind it.
     inbounds: [
       {
         type: 'tun',
