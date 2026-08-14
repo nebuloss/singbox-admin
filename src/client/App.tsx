@@ -43,6 +43,7 @@ export type State = {
   service?: { running: boolean; version: string }
   tunnel?: { host: string; port: number; path: string }
   publicUrl?: string | null
+  proxySnippet?: string
   wireguard?: Wireguard
 }
 
@@ -1019,6 +1020,19 @@ function SettingsTab({
           </div>
           <TonalButton disabled={busy} onClick={() => setAddress(true)}>{t('Modifier')}</TonalButton>
         </div>
+      </Card>
+
+      <Card className="mb-6">
+        <h2 className="text-xl leading-7 font-normal">{t('Reverse proxy')}</h2>
+        <p className="mt-1 mb-4 text-sm text-on-surface-variant">
+          {t('À placer sur le nom public. Le chemin du tunnel n’y figure pas : le proxy transmet tout et laisse sing-box refuser ce qu’il ne reconnaît pas, ce qui permet de régénérer ce chemin sans rien changer ici.')}
+        </p>
+        <Copyable
+          label={t('Configuration nginx')}
+          value={state.proxySnippet ?? ''}
+          copyLabel={t('Copier la configuration')}
+          rows={14}
+        />
       </Card>
 
       <Card>

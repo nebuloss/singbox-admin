@@ -67,6 +67,7 @@ type Inbound = {
   type?: string
   tag?: string
   listen?: string
+  listen_port?: number
   users?: User[]
   transport?: { type?: string; path?: string }
 }
@@ -117,6 +118,21 @@ function readConfig(): Config {
  * being nothing but a label.
  */
 const PARKED = 'vless-suspended'
+
+/**
+ * The two paths on the public name, and who decides them.
+ *
+ * The tunnel's path is a secret this app rewrites at will, and the reverse
+ * proxy is deliberately never told it — it forwards everything and lets
+ * sing-box refuse what it does not recognise. The subscription prefix is the
+ * opposite: fixed, public by design, and the one thing the proxy has to know,
+ * because it is the only path that goes to this app rather than to sing-box.
+ *
+ * That asymmetry is the whole arrangement, so the snippet the proxy needs is
+ * generated from these values rather than written down twice — see
+ * proxySnippet().
+ */
+const SUB_PREFIX = '/sub/'
 
 const vlessInbounds = (cfg: Config) => (cfg.inbounds ?? []).filter((i) => i.type === 'vless')
 
@@ -266,6 +282,54 @@ function clientProfile(user: User, cfg: Config, wsPath: string, base: PublicBase
  * a first visit and wrong as soon as the interface lives on an internal name
  * the phone cannot resolve, which is why it is worth setting.
  */
+/**
+ * The reverse-proxy configuration for the public name, written out from what
+ * the app actually knows: where sing-box listens, which prefix belongs to this
+ * app, and nothing else. Handing it over beats documenting it — that is how
+ * two places drift apart.
+ */
+function proxySnippet(cfg: Config, appPort: number): string {
+  const singbox = liveInbound(cfg).listen_port ?? 8081
+  return [
+    '# La racine est servie directement : autant lui epargner un aller-retour.',
+    'location = / {',
+    '  root /var/www/decoy;',
+    '  try_files /index.html =404;',
+    '}',
+    '',
+    "# Le profil d'un appareil. Seul chemin qui va a l'interface, pas au tunnel.",
+    `location ${SUB_PREFIX} {`,
+    `  proxy_pass http://127.0.0.1:${appPort};`,
+    '  proxy_set_header Host $host;',
+    '  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
+    '  proxy_set_header X-Forwarded-Proto $scheme;',
+    '  proxy_intercept_errors on;',
+    '  error_page 400 401 403 404 500 502 503 504 = @couverture;',
+    '}',
+    '',
+    '# Tout le reste va a sing-box, qui ne repond qu au chemin secret avec un',
+    "# upgrade WebSocket. Le proxy n'a pas a connaitre ce chemin : les autres",
+    '# cas sont rattrapes et rendus sous la page de couverture, en 200.',
+    'location / {',
+    `  proxy_pass http://127.0.0.1:${singbox};`,
+    '  proxy_set_header Host $host;',
+    '  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
+    '  proxy_set_header Upgrade $http_upgrade;',
+    '  proxy_set_header Connection $http_connection;',
+    '  proxy_http_version 1.1;',
+    '  proxy_read_timeout 86400s;',
+    '  proxy_send_timeout 86400s;',
+    '  proxy_intercept_errors on;',
+    '  error_page 400 401 403 404 500 502 503 504 = @couverture;',
+    '}',
+    '',
+    'location @couverture {',
+    '  root /var/www/decoy;',
+    '  try_files /index.html =404;',
+    '}',
+  ].join('\n')
+}
+
 type PublicBase = { origin: string; host: string; port: number }
 
 function publicBase(req: express.Request): PublicBase {
@@ -598,7 +662,7 @@ app.get('/api/state', async (req, res) => {
     const describe = async (u: User, enabled: boolean) => {
       const name = names[u.uuid]
       const link = linkFor(u, name, wsPath, base)
-      const sub = `${base.origin}/sub/${u.uuid}`
+      const sub = `${base.origin}${SUB_PREFIX}${u.uuid}`
       // The QR carries the subscription rather than the bare link: same device,
       // but it arrives configured, DNS included.
       return { uuid: u.uuid, name, link, sub, enabled, qr: await QRCode.toString(sub, { type: 'svg', margin: 1 }) }
@@ -613,6 +677,7 @@ app.get('/api/state', async (req, res) => {
       service: { running: /started|running|active/i.test(status.out), version },
       tunnel: { host: base.host, port: base.port, path: wsPath },
       publicUrl: readAdminConfig(ADMIN_CONFIG).publicUrl,
+      proxySnippet: proxySnippet(cfg, PORT),
       wireguard: wireguardSummary(cfg, names),
     })
   } catch (e) {
@@ -961,7 +1026,7 @@ app.delete('/api/wireguard/:tag', requireAuth, async (req, res) => {
  * the same credential the link carries, so a device that can use one can fetch
  * the other, and nothing else can.
  */
-app.get('/sub/:uuid', (req, res) => {
+app.get(`${SUB_PREFIX}:uuid`, (req, res) => {
   try {
     const cfg = readConfig()
     const user = allUsers(cfg).find((u) => u.uuid === req.params.uuid)
