@@ -151,11 +151,21 @@ export function updateAdminConfig(
  * too: a link built from a session is no use to someone who has none, which is
  * the whole reason to want one.
  */
+/**
+ * A reachable address, or a link that signs someone in.
+ *
+ * Sixteen random bytes, written in the twenty-two characters a URL takes them
+ * in rather than the thirty-six a UUID would spend on the same 128 bits. The
+ * shape is this app's to choose: these are keys in its own table, not
+ * credentials any protocol has an opinion about — a VLESS identifier is a UUID
+ * because sing-box parses one, and stays a UUID.
+ */
+export function newToken(): string {
+  return crypto.randomBytes(16).toString('base64url')
+}
+
 export function mintLink(file: string, ttlMs: number): string {
-  // Not a UUID: this one is meant to be read off a screen and typed, so it is
-  // the same 128 bits written in half the characters. Nothing indexes it — it
-  // is a key in this file for ten minutes, then it is gone.
-  const token = crypto.randomBytes(16).toString('base64url')
+  const token = newToken()
   const now = Date.now()
   updateAdminConfig(file, (c) => ({
     ...c,

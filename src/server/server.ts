@@ -23,6 +23,7 @@ import {
   updateAdminConfig,
   mintLink,
   spendLink,
+  newToken,
   type AdminConfig,
   type Device,
   hashPassword,
@@ -152,7 +153,7 @@ const PARKED = 'vless-suspended'
  * secret. Which identifier is the tunnel stays this app's business, which is
  * what lets it be rewritten without anyone else hearing about it.
  */
-const UUID_PATH = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+const TOKEN_PATH = '[A-Za-z0-9_-]{22}'
 
 const vlessInbounds = (cfg: Config) => (cfg.inbounds ?? []).filter((i) => i.type === 'vless')
 
@@ -890,7 +891,9 @@ app.post('/api/users', requireAuth, async (req, res) => {
     if (taken(deviceEntries(admin), name))
       return res.status(409).json({ error: 'ce nom existe deja' })
 
-    const token = crypto.randomUUID()
+    const token = newToken()
+    // The credential stays a UUID: sing-box parses one, and hashes anything
+    // else into a v5 the client would have no way to reproduce.
     const uuid = crypto.randomUUID()
     const cfg = readConfig()
     liveInbound(cfg).users!.push({ uuid, name: uuid })
@@ -984,7 +987,7 @@ app.post('/api/tunnel/path', requireAuth, async (req, res) => {
     // Shaped like every other reachable address: from outside, a profile and
     // the tunnel are both /<identifier>, and only the WebSocket upgrade tells
     // them apart. Nothing on the outside can sort one from the other by looking.
-    inbound.transport.path = `/${crypto.randomUUID()}`
+    inbound.transport.path = `/${newToken()}`
     await commit(cfg)
     res.json({ ok: true, path: inbound.transport.path })
   } catch (e) {
@@ -1228,7 +1231,7 @@ publicApp.disable('x-powered-by')
 
 publicApp.get('/', (_req, res) => res.type('html').send(LANDING))
 
-publicApp.get(`/:token(${UUID_PATH})`, async (req, res) => {
+publicApp.get(`/:token(${TOKEN_PATH})`, async (req, res) => {
   try {
     const device = readAdminConfig(ADMIN_CONFIG).devices[req.params.token]
     // A token nobody holds is answered exactly like any other address: there
@@ -1372,7 +1375,7 @@ function adopt(): void {
     devices: {
       ...c.devices,
       ...Object.fromEntries(
-        orphans.map((uuid) => [uuid, { name: `appareil ${uuid.slice(0, 8)}`, uuids: [uuid] }]),
+        orphans.map((uuid) => [newToken(), { name: `appareil ${uuid.slice(0, 8)}`, uuids: [uuid] }]),
       ),
     },
   }))

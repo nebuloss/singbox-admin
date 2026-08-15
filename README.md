@@ -88,6 +88,14 @@ library.
 else; a tunnel is a tag `wg-<id>` carrying a random, permanent id. Neither has
 to be readable, so neither ever has to change.
 
+Two shapes, for two different owners. A VLESS credential is a UUID because
+sing-box parses one — hand it anything else and it hashes it into a v5 the
+client could not reproduce. Every address this app mints for itself — a
+subscription, the tunnel's path, a sign-in link — is sixteen random bytes in
+base64url instead: the same 128 bits in twenty-two characters rather than
+thirty-six, because those are keys in its own table and no protocol has an
+opinion about them.
+
 The readable name lives in the app's own `config.json` — a small file next
 to the install, the same
 one holding the password hash — filed under that identifier. Renaming therefore

@@ -91,7 +91,7 @@ write_config() {
   uuid=$(sing-box generate uuid)
   # A random path acts as a light shared secret: scanners hitting the hostname
   # get a 404 from the reverse proxy instead of finding the inbound.
-  ws_path="${WS_PATH:-/$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
+  ws_path="${WS_PATH:-/$(head -c 16 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')}"
 
   cat > "$CONFIG" <<EOF
 {
