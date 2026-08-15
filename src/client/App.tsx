@@ -409,13 +409,22 @@ function UserCard({
           </p>
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-4">
-          {/* The name and its identifier own the width; nothing shares their
-              row. What can be done to the device lives in one bar at the foot
-              of the card instead, the same on every screen. */}
+          {/* Renaming belongs against the name it changes, so the pencil sits
+              at the end of it rather than in the bar below. The name still
+              wraps rather than making room by losing its end. */}
           <div className="min-w-0">
-            <p className="text-lg leading-6 font-medium break-words">
-              {user.name ?? t('sans nom')}
-            </p>
+            <div className="flex items-start gap-0.5">
+              <p className="min-w-0 text-lg leading-6 font-medium break-words">
+                {user.name ?? t('sans nom')}
+              </p>
+              {/* A tap target twice the height of the line it sits on, pulled
+                  back up by the difference so it rides that first line. */}
+              <span className="-mt-2 shrink-0">
+                <IconButton label={t('Renommer')} onClick={onRename}>
+                  <Pencil />
+                </IconButton>
+              </span>
+            </div>
             <p className="mt-0.5 font-mono text-xs break-all text-on-surface-variant">
               {user.token}
             </p>
@@ -453,9 +462,6 @@ function UserCard({
               </span>
             </div>
             <div className="-mr-2 flex items-center">
-              <IconButton label={t('Renommer')} onClick={onRename}>
-                <Pencil />
-              </IconButton>
               <IconButton label={t('Révoquer')} tone="error" onClick={onRevoke}>
                 <path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
               </IconButton>
