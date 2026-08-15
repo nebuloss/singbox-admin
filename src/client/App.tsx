@@ -93,20 +93,28 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    // A sign-in link lands here as a fragment. Spend it, wipe it from the
-    // address bar before anything can copy it down, then carry on as usual.
-    const hash = window.location.hash.replace(/^#/, '')
-    const token = /(?:^|&)login=([0-9a-fA-F-]{36})/.exec(hash)?.[1]
+    // A sign-in link carries its token in the fragment, where a browser keeps
+    // it, but `?login=` is honoured too — a link that has been through a mail
+    // client or a QR scanner does not always arrive with its fragment intact.
+    const url = new URL(window.location.href)
+    const hash = url.hash.replace(/^#/, '')
+    const query = url.searchParams.get('login') ?? ''
+    const token =
+      /(?:^|&)login=([0-9a-fA-F-]{36})/.exec(hash)?.[1] ??
+      (/^[0-9a-fA-F-]{36}$/.test(query) ? query : undefined)
     if (!token) {
       void refresh()
       return
     }
-    // The section travels alongside the token, so a link can land wherever it
-    // was meant to. What stays in the address bar is that section alone.
+    // The fragment also names the page to land on, so one link can sign you in
+    // and take you somewhere. The token leaves the address bar right away,
+    // before a screenshot or a shoulder can keep it, and leaves no history
+    // entry behind: what remains is a real page, addressed as usual.
     const section = (TABS as readonly string[]).includes(hash.split('&')[0])
       ? hash.split('&')[0]
       : TABS[0]
-    history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${section}`)
+    url.searchParams.delete('login')
+    history.replaceState(null, '', `${url.pathname}${url.search}#${section}`)
     void api('/api/session/claim', { method: 'POST', body: JSON.stringify({ token }) })
       .catch((e) => setError((e as Error).message))
       .finally(() => void refresh())
@@ -404,17 +412,20 @@ function UserCard({
           </p>
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-4">
-          {/* One line, always: a name that truncates and controls that do not.
-              State goes on its own row below, where it can wrap without
-              squeezing the name off the card on a narrow screen. */}
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-lg leading-6 font-medium">{user.name ?? t('sans nom')}</p>
-              <p className="mt-0.5 truncate font-mono text-xs text-on-surface-variant">
-                {user.token.slice(0, 13)}…
+          {/* On a phone the name owns the width and the controls drop below it,
+              rather than the three of them splitting a row too narrow for any:
+              a name cut mid-word and an identifier cut mid-hex say nothing.
+              Side by side again as soon as there is room for both. */}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-2">
+            <div className="min-w-0 sm:flex-1">
+              <p className="text-lg leading-6 font-medium break-words">
+                {user.name ?? t('sans nom')}
+              </p>
+              <p className="mt-0.5 font-mono text-xs break-all text-on-surface-variant">
+                {user.token}
               </p>
             </div>
-            <div className="-mr-2 flex shrink-0 items-center">
+            <div className="-mt-1 -mr-2 flex shrink-0 items-center justify-end sm:mt-0">
               <IconButton label={t('Renommer')} onClick={onRename}>
                 <Pencil />
               </IconButton>
@@ -656,7 +667,7 @@ function WireguardTab({
                 }`}
               >
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
                     {orderable && (
                       <span
                         className="hidden cursor-grab text-on-surface-variant active:cursor-grabbing sm:block"
@@ -671,7 +682,7 @@ function WireguardTab({
                     <span className="grid size-7 shrink-0 place-items-center rounded-full bg-surface-low text-xs font-medium text-on-surface-variant">
                       {i + 1}
                     </span>
-                    <p className="text-lg leading-6 font-medium">{p.name}</p>
+                    <p className="min-w-0 text-lg leading-6 font-medium break-words">{p.name}</p>
                     {serving && <Chip tone="ok">{t('en service')}</Chip>}
                     {!p.enabled && <Chip>{t('désactivé')}</Chip>}
                   </div>

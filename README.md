@@ -301,6 +301,10 @@ interface is opened most.
 Both ride in the URL fragment, `#wireguard&login=…`, which a browser never
 sends to a server — so the token cannot land in an access log or a Referer
 header the way a query string would, and the page it names costs nothing extra.
+A `?login=…` is accepted all the same, for links that have been through
+something that did not keep the fragment; either way the token is spent and
+struck from the address bar before the page finishes loading.
+
 It is worth what the password is worth while it lives, so it does not live long
 and is spent on sight: a link that failed is a link that is gone.
 
