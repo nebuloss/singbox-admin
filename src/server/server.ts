@@ -748,8 +748,8 @@ app.post('/api/password', requireAuth, (req, res) => {
 const LINK_TTL = Number(process.env.LINK_MINUTES ?? 10) * 60_000
 
 app.post('/api/session/link', requireAuth, async (req, res) => {
-  // An identifier, like everything else here. A hundred and twenty-two random
-  // bits are far past guessing for something that lives ten minutes and once.
+  // A hundred and twenty-eight random bits, far past guessing for something
+  // that lives ten minutes and once.
   const token = mintLink(ADMIN_CONFIG, LINK_TTL)
 
   const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0] || req.protocol
@@ -759,8 +759,11 @@ app.post('/api/session/link', requireAuth, async (req, res) => {
   // Section and token share the fragment, which a browser never sends to a
   // server: the link can point at a page without the token ever reaching an
   // access log, which a query string could not promise.
-  const section = String(req.body?.section ?? '').replace(/[^a-z]/g, '') || 'appareils'
-  const url = `${proto}://${req.get('host')}/#${section}&login=${token}`
+  // The default page is the one an absent section already lands on, so naming
+  // it would only make the link longer to read off a screen.
+  const section = String(req.body?.section ?? '').replace(/[^a-z]/g, '')
+  const prefix = section && section !== 'appareils' ? `${section}&` : ''
+  const url = `${proto}://${req.get('host')}/#${prefix}login=${token}`
   res.json({ url, minutes: Math.round(LINK_TTL / 60_000), qr: await QRCode.toString(url, { type: 'svg', margin: 1 }) })
 })
 

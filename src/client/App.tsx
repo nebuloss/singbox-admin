@@ -97,8 +97,8 @@ export default function App() {
     const hash = url.hash.replace(/^#/, '')
     const query = url.searchParams.get('login') ?? ''
     const token =
-      /(?:^|&)login=([0-9a-fA-F-]{36})/.exec(hash)?.[1] ??
-      (/^[0-9a-fA-F-]{36}$/.test(query) ? query : undefined)
+      /(?:^|&)login=([A-Za-z0-9_-]{22})/.exec(hash)?.[1] ??
+      (/^[A-Za-z0-9_-]{22}$/.test(query) ? query : undefined)
     if (!token) {
       void refresh()
       return

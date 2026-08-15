@@ -152,7 +152,10 @@ export function updateAdminConfig(
  * the whole reason to want one.
  */
 export function mintLink(file: string, ttlMs: number): string {
-  const token = crypto.randomUUID()
+  // Not a UUID: this one is meant to be read off a screen and typed, so it is
+  // the same 128 bits written in half the characters. Nothing indexes it — it
+  // is a key in this file for ten minutes, then it is gone.
+  const token = crypto.randomBytes(16).toString('base64url')
   const now = Date.now()
   updateAdminConfig(file, (c) => ({
     ...c,

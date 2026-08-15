@@ -22,8 +22,11 @@ try {
   const base = (process.argv[2] ?? '').replace(/\/+$/, '')
   // Section and token share the fragment, so the link can name a page without
   // the token ever leaving the browser.
-  const section = (process.argv[3] ?? 'appareils').replace(/[^a-z]/g, '') || 'appareils'
-  const fragment = `#${section}&login=${token}`
+  // An absent section already lands on the first page, so naming it would only
+  // lengthen a link meant to be read off a screen.
+  const section = (process.argv[3] ?? '').replace(/[^a-z]/g, '')
+  const prefix = section && section !== 'appareils' ? `${section}&` : ''
+  const fragment = `#${prefix}login=${token}`
   console.log(base ? `${base}/${fragment}` : fragment)
   if (!base) console.log("Ajoutez l'adresse de l'interface devant, ou passez-la en argument.")
   console.log(`Valable ${MINUTES} minutes, une seule fois.`)
