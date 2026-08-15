@@ -26,9 +26,6 @@ export type User = {
   sub: string
   qr: string
   enabled: boolean
-  /** How many credentials this device currently holds — more than one means a
-   *  replacement is in flight, waiting for the old one to fall out of use. */
-  credentials: number
 }
 export type Profile = {
   tag: string
@@ -412,44 +409,20 @@ function UserCard({
           </p>
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-4">
-          {/* On a phone the name owns the width and the controls drop below it,
-              rather than the three of them splitting a row too narrow for any:
-              a name cut mid-word and an identifier cut mid-hex say nothing.
-              Side by side again as soon as there is room for both. */}
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-2">
-            <div className="min-w-0 sm:flex-1">
-              <p className="text-lg leading-6 font-medium break-words">
-                {user.name ?? t('sans nom')}
-              </p>
-              <p className="mt-0.5 font-mono text-xs break-all text-on-surface-variant">
-                {user.token}
-              </p>
-            </div>
-            <div className="-mt-1 -mr-2 flex shrink-0 items-center justify-end sm:mt-0">
-              <IconButton label={t('Renommer')} onClick={onRename}>
-                <Pencil />
-              </IconButton>
-              <IconButton label={t('Révoquer')} tone="error" onClick={onRevoke}>
-                <path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
-              </IconButton>
-              <Switch
-                label={`${t('Activer')} ${user.name ?? user.token.slice(0, 8)}`}
-                checked={user.enabled}
-                disabled={busy}
-                onChange={onToggle}
-              />
-            </div>
+          {/* The name and its identifier own the width; nothing shares their
+              row. What can be done to the device lives in one bar at the foot
+              of the card instead, the same on every screen. */}
+          <div className="min-w-0">
+            <p className="text-lg leading-6 font-medium break-words">
+              {user.name ?? t('sans nom')}
+            </p>
+            <p className="mt-0.5 font-mono text-xs break-all text-on-surface-variant">
+              {user.token}
+            </p>
           </div>
 
-          {(!user.enabled || user.credentials > 1) && (
-            <div className="flex flex-wrap items-center gap-2">
-              {!user.enabled && <Chip>{t('désactivé')}</Chip>}
-              {user.credentials > 1 && <Chip>{t('renouvellement')}</Chip>}
-            </div>
-          )}
-
           {!user.enabled && (
-            <p className="-mt-1 text-xs text-on-surface-variant">
+            <p className="-mt-2 text-xs text-on-surface-variant">
               {t('Le lien reste valide : réactiver l’appareil suffit à le remettre en service.')}
             </p>
           )}
@@ -464,6 +437,30 @@ function UserCard({
             copyLabel={t('Copier le lien')}
             rows={3}
           />
+
+          {/* The switch says what it does in words, rather than leaving a bare
+              toggle between two icons to be guessed at. */}
+          <div className="-mb-1 flex items-center justify-between gap-3 border-t border-outline-variant pt-3">
+            <div className="flex items-center gap-3">
+              <Switch
+                label={`${t('Activer')} ${user.name ?? user.token.slice(0, 8)}`}
+                checked={user.enabled}
+                disabled={busy}
+                onChange={onToggle}
+              />
+              <span className="text-sm text-on-surface-variant" aria-hidden>
+                {user.enabled ? t('Actif') : t('Inactif')}
+              </span>
+            </div>
+            <div className="-mr-2 flex items-center">
+              <IconButton label={t('Renommer')} onClick={onRename}>
+                <Pencil />
+              </IconButton>
+              <IconButton label={t('Révoquer')} tone="error" onClick={onRevoke}>
+                <path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+              </IconButton>
+            </div>
+          </div>
         </div>
       </div>
     </li>

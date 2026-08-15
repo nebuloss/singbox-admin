@@ -811,7 +811,6 @@ app.get('/api/state', async (req, res) => {
           enabled: live.has(current),
           sub,
           link: linkFor(current, d.name, wsPath, base),
-          credentials: d.uuids.length,
           qr: await QRCode.toString(imp, { type: 'svg', margin: 1 }),
         }
       }),
