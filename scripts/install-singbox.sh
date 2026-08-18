@@ -88,10 +88,14 @@ write_config() {
   fi
 
   mkdir -p "$(dirname "$CONFIG")"
-  uuid=$(sing-box generate uuid)
+  # Both are sixteen random bytes in base64url. A VLESS identifier need not be
+  # a UUID: given anything shorter, both sing-box and Xray hash it into the
+  # same v5 over the nil namespace, so the two ends agree without being told.
+  short() { head -c 16 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'; }
+  uuid=$(short)
   # A random path acts as a light shared secret: scanners hitting the hostname
   # get a 404 from the reverse proxy instead of finding the inbound.
-  ws_path="${WS_PATH:-/$(head -c 16 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')}"
+  ws_path="${WS_PATH:-/$(short)}"
 
   cat > "$CONFIG" <<EOF
 {

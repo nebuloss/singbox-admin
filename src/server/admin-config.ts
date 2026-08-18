@@ -152,13 +152,17 @@ export function updateAdminConfig(
  * the whole reason to want one.
  */
 /**
- * A reachable address, or a link that signs someone in.
+ * An identifier: an address, a credential, a link that signs someone in.
  *
  * Sixteen random bytes, written in the twenty-two characters a URL takes them
- * in rather than the thirty-six a UUID would spend on the same 128 bits. The
- * shape is this app's to choose: these are keys in its own table, not
- * credentials any protocol has an opinion about — a VLESS identifier is a UUID
- * because sing-box parses one, and stays a UUID.
+ * in rather than the thirty-six a UUID would spend on the same 128 bits.
+ *
+ * A VLESS credential is one of these too. It does not have to be a UUID:
+ * handed a shorter string, sing-box and Xray both hash it into a v5 over the
+ * nil namespace — the same computation, so the two ends agree without ever
+ * discussing it. What travels on the wire is sixteen bytes either way; the
+ * UUID was only ever how they were written down. Xray takes at most thirty
+ * characters through that branch, which twenty-two comfortably clears.
  */
 export function newToken(): string {
   return crypto.randomBytes(16).toString('base64url')

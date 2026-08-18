@@ -863,7 +863,7 @@ async function rotateNow(token: string, device: Device): Promise<string> {
   const last = device.rotated ? Date.parse(device.rotated) : 0
   if (Number.isFinite(last) && now - last < ROTATE_EVERY) return device.uuids[0]
 
-  const fresh = crypto.randomUUID()
+  const fresh = newToken()
   const cfg = readConfig()
   const home = homeOf(cfg, device.uuids) ?? liveInbound(cfg)
   home.users = [...(home.users ?? []), { uuid: fresh, name: fresh }]
@@ -892,9 +892,7 @@ app.post('/api/users', requireAuth, async (req, res) => {
       return res.status(409).json({ error: 'ce nom existe deja' })
 
     const token = newToken()
-    // The credential stays a UUID: sing-box parses one, and hashes anything
-    // else into a v5 the client would have no way to reproduce.
-    const uuid = crypto.randomUUID()
+    const uuid = newToken()
     const cfg = readConfig()
     liveInbound(cfg).users!.push({ uuid, name: uuid })
     await commit(cfg)
@@ -1284,7 +1282,7 @@ publicApp.listen(PUBLIC_PORT_LISTEN, () => {
 // would ever look idle enough to retire.
 let logOffset = -1
 
-function observeLog(): Record<string, string> {
+function observeLog(known: Set<string>): Record<string, string> {
   const seen: Record<string, string> = {}
   try {
     const path = readConfig().log?.output
@@ -1303,7 +1301,11 @@ function observeLog(): Record<string, string> {
     fs.closeSync(fd)
     logOffset = size
     const now = new Date().toISOString()
-    for (const m of buf.toString('utf8').matchAll(/\[([0-9a-fA-F-]{36})\]/g)) seen[m[1]] = now
+    // Matched against the credentials this app knows, not against a shape.
+    // An identifier is no longer distinctive enough to recognise on sight, and
+    // a stray bracket in a log line must not end up in the file for good.
+    for (const m of buf.toString('utf8').matchAll(/\[([A-Za-z0-9_-]{20,40})\]/g))
+      if (known.has(m[1])) seen[m[1]] = now
   } catch {
     // A missing or unreadable log only means no news, never a reason to retire.
   }
@@ -1313,7 +1315,9 @@ function observeLog(): Record<string, string> {
 const sweep = () => serialise(sweepNow)
 
 async function sweepNow(): Promise<void> {
-  const fresh = observeLog()
+  const fresh = observeLog(
+    new Set(Object.values(readAdminConfig(ADMIN_CONFIG).devices).flatMap((d) => d.uuids)),
+  )
   const now = Date.now()
 
   const stale: string[] = []

@@ -16,7 +16,7 @@ for why.
 
 ## What it manages
 
-**Devices.** Adding one generates a UUID and gives you two ways to set a client
+**Devices.** Adding one generates a credential and gives you two ways to set a client
 up, both on the card:
 
 - a **subscription URL**, which serves a full sing-box profile — the tunnel's
@@ -44,7 +44,7 @@ There are two different ways to take access away:
 | | effect | reversible |
 |---|---|---|
 | switch off | the device can no longer connect; its link and QR stay valid | yes, instantly |
-| revoke | the UUID is removed; link and QR stop working | no — coming back means a new identity |
+| revoke | the credential is removed; link and QR stop working | no — coming back means a new identity |
 
 **Tunnels.** WireGuard endpoints, pasted in as the `.conf` file a router or
 provider hands you. They form an ordered list: the first enabled one carries
@@ -84,17 +84,17 @@ library.
 
 ### Where the state lives
 
-**sing-box is only ever told identifiers.** A device is a UUID and nothing
-else; a tunnel is a tag `wg-<id>` carrying a random, permanent id. Neither has
-to be readable, so neither ever has to change.
+**sing-box is only ever told identifiers.** A device is an identifier and
+nothing else; a tunnel is a tag `wg-<id>` carrying a random, permanent id.
+Neither has to be readable, so neither ever has to change.
 
-Two shapes, for two different owners. A VLESS credential is a UUID because
-sing-box parses one — hand it anything else and it hashes it into a v5 the
-client could not reproduce. Every address this app mints for itself — a
-subscription, the tunnel's path, a sign-in link — is sixteen random bytes in
-base64url instead: the same 128 bits in twenty-two characters rather than
-thirty-six, because those are keys in its own table and no protocol has an
-opinion about them.
+They are all the same thing: sixteen random bytes in base64url, twenty-two
+characters. A subscription address, the tunnel's path, a sign-in link — and the
+VLESS credential too, which does not have to be a UUID. Handed a shorter
+string, sing-box and Xray each hash it into a v5 over the nil namespace: the
+same computation on both sides, so the two ends agree without discussing it,
+and sixteen bytes travel either way. A UUID was only ever how those bytes were
+written down, at thirty-six characters instead of twenty-two.
 
 The readable name lives in the app's own `config.json` — a small file next
 to the install, the same
@@ -141,7 +141,7 @@ Both scripts are idempotent: the same command installs and updates.
 curl -fsSL https://raw.githubusercontent.com/nebuloss/singbox-admin/main/scripts/install-singbox.sh | sh
 ```
 
-Installs sing-box and writes a VLESS + WebSocket inbound with a generated UUID
+Installs sing-box and writes a VLESS + WebSocket inbound with a generated credential
 and a random secret path. It leaves an existing configuration untouched.
 
 TLS is not handled here on purpose: the inbound speaks plain WebSocket and
@@ -230,10 +230,11 @@ location @cover {
 ```
 
 **The proxy is never told the secret path.** It forwards and lets sing-box
-decide, which buys two things. Probing is uniform — every path returns the same
-200 cover page, including the real one, so there is no status code to sort
-paths by; only a genuine WebSocket upgrade behaves differently, and that needs
-the path *and* a valid UUID. And the path can be regenerated from the interface
+decide, which buys two things. Probing is uniform — `/` answers 200 with the
+landing page and every other path answers 404 with the same cover body, the
+real one included, so there is nothing to sort paths by; only a genuine
+WebSocket upgrade behaves differently, and that needs the path *and* a valid
+credential. And the path can be regenerated from the interface
 without touching the proxy at all.
 
 Three things worth knowing:
@@ -347,8 +348,8 @@ proxy that terminates TLS — not to face the internet.
 - The process runs as root because it writes the sing-box configuration and
   drives the service manager
 - The secret path is obfuscation, not authentication: it keeps a scan of the
-  hostname from finding anything, while the UUID is what actually lets a device
-  in. Treat the path as shared secret material — it sits in every client's
+  hostname from finding anything, while the credential is what actually lets a
+  device in. Treat the path as shared secret material — it sits in every client's
   configuration — and regenerate it if you think it leaked
 - Switching a device off moves it off the public inbound, so it can no longer
   authenticate at all — but it keeps its identity and its link, ready to work
