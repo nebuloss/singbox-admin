@@ -16,6 +16,18 @@ for why.
 
 ## What it manages
 
+**Overview.** The page it opens on: what is connected right now, how much it is
+moving, and which tunnel it leaves by. It comes from two places at once, since
+neither answers alone — sing-box's log names the credential behind a connection
+and the port it arrived on, its Clash controller counts the bytes and names the
+outbound, but never says whose connection it is. The source port is in both and
+unique while the connection is open, which is what turns a byte count into a
+device. A connection this process did not see opened is counted apart rather
+than blamed on someone.
+
+The controller lives on loopback behind a secret of its own, written by the
+install script and added to an existing configuration on first start.
+
 **Devices.** Adding one generates a credential and gives you two ways to set a client
 up, both on the card:
 
