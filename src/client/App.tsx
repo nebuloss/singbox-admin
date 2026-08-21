@@ -356,8 +356,15 @@ type LiveConnection = {
 type Activity = {
   counters: boolean
   totals: { up: number; down: number; connections: number; unattributed: number; memory: number }
-  devices: { token: string; name: string; lastSeen: string | null; connections: number; up: number; down: number }[]
-  routes: { tag: string; name: string | null; enabled: boolean; connections: number; up: number; down: number }[]
+  devices: {
+    token: string
+    name: string
+    lastSeen: string | null
+    connections: number
+    up: number
+    down: number
+    routes: (string | null)[]
+  }[]
   live: LiveConnection[]
   truncated: boolean
 }
@@ -551,6 +558,12 @@ function ActivityTab() {
                       ? `↓ ${bytes(d.down)}  ↑ ${bytes(d.up)}`
                       : `${t('vu il y a')} ${since(d.lastSeen) ?? t('jamais')}`}
                   </span>
+                  {d.routes.length > 0 && (
+                    <span className="mt-0.5 block truncate text-xs opacity-70">
+                      {t('par')}{' '}
+                      {d.routes.map((r) => r ?? t('la sortie directe')).join(', ')}
+                    </span>
+                  )}
                 </span>
                 <span className="shrink-0 text-sm tabular-nums">
                   {d.connections || <span className="text-on-surface-variant">{t('inactif')}</span>}
@@ -559,34 +572,6 @@ function ActivityTab() {
             </li>
           ))}
         </ul>
-      </section>
-
-      <section>
-        <h2 className="mb-3 px-1 text-sm font-medium tracking-wide text-on-surface-variant uppercase">
-          {t('Sorties')}
-        </h2>
-        {live.routes.length ? (
-          <ul className="flex flex-col gap-2">
-            {live.routes.map((r) => (
-              <li
-                key={r.tag}
-                className="flex items-center gap-3 rounded-[var(--radius-md3-xl)] bg-surface-container p-4"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block font-medium break-words">
-                    {r.name ?? t('directement, sans tunnel')}
-                  </span>
-                  <span className="mt-0.5 block text-xs text-on-surface-variant tabular-nums">
-                    ↓ {bytes(r.down)}  ↑ {bytes(r.up)}
-                  </span>
-                </span>
-                <span className="shrink-0 text-sm tabular-nums">{r.connections}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <Empty>{t('Rien ne traverse en ce moment.')}</Empty>
-        )}
       </section>
 
       {shown && (

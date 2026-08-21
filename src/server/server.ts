@@ -1520,9 +1520,8 @@ app.get('/api/activity', requireAuth, async (_req, res) => {
     for (const [token, d] of Object.entries(admin.devices))
       for (const u of d.uuids) owner.set(u, token)
 
-    const blank = () => ({ connections: 0, up: 0, down: 0 })
+    const blank = () => ({ connections: 0, up: 0, down: 0, routes: new Set<string | null>() })
     const perDevice = new Map<string, ReturnType<typeof blank>>()
-    const perRoute = new Map<string, ReturnType<typeof blank>>()
     const wgTags = new Set(wgEndpoints(cfg).map((e) => e.tag))
     const named = (tag: string) => (tag === 'direct' ? null : (admin.tunnels[wgKey(tag)] ?? wgId(tag)))
     const live: {
@@ -1543,11 +1542,6 @@ app.get('/api/activity', requireAuth, async (_req, res) => {
       // The chain names every outbound the traffic crossed; the one that is a
       // tunnel is the answer, and its absence means it went out directly.
       const tag = (c.chains ?? []).find((t) => wgTags.has(t)) ?? 'direct'
-      const route = perRoute.get(tag) ?? blank()
-      route.connections++
-      route.up += up
-      route.down += down
-      perRoute.set(tag, route)
 
       const bearer = bearers.get(c.metadata?.sourcePort ?? '')
       const token = (bearer && owner.get(bearer.credential)) ?? null
@@ -1557,6 +1551,9 @@ app.get('/api/activity', requireAuth, async (_req, res) => {
         d.connections++
         d.up += up
         d.down += down
+        // Which way out is something a device does, not a category of its own:
+        // it belongs against the device using it.
+        d.routes.add(named(tag))
         perDevice.set(token, d)
       }
 
@@ -1592,18 +1589,10 @@ app.get('/api/activity', requireAuth, async (_req, res) => {
         unattributed,
         memory: snap?.memory ?? 0,
       },
-      devices: Object.entries(admin.devices).map(([token, d]) => ({
-        token,
-        name: d.name,
-        lastSeen: at(d.uuids),
-        ...(perDevice.get(token) ?? blank()),
-      })),
-      routes: [...perRoute].map(([tag, r]) => ({
-        tag,
-        name: named(tag),
-        enabled: tag === 'direct' ? true : isEnabled(tag),
-        ...r,
-      })),
+      devices: Object.entries(admin.devices).map(([token, d]) => {
+        const { routes, ...counts } = perDevice.get(token) ?? blank()
+        return { token, name: d.name, lastSeen: at(d.uuids), ...counts, routes: [...routes] }
+      }),
       live,
       truncated: (snap?.connections?.length ?? 0) > LIVE_MAX,
     })
