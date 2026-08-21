@@ -62,7 +62,7 @@ const EN: Record<string, string> = {
   Copié: 'Copied',
 
   // Activité
-  Activité: 'Activity',
+  'Vue d’ensemble': 'Overview',
   'Mesure en cours…': 'Measuring…',
   'Compteurs indisponibles : sing-box ne répond pas sur son contrôleur local.':
     'Counters unavailable: sing-box is not answering on its local controller.',
@@ -77,7 +77,7 @@ const EN: Record<string, string> = {
   'connexion(s)': 'connection(s)',
   jamais: 'never',
   'vu il y a': 'seen',
-  'Par où ça sort': 'Where it leaves by',
+  Sorties: 'Egress',
   'directement, sans tunnel': 'directly, no tunnel',
   'Rien ne traverse en ce moment.': 'Nothing is going through right now.',
   o: 'B',

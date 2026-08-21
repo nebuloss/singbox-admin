@@ -25,7 +25,7 @@ try {
   // An absent section already lands on the first page, so naming it would only
   // lengthen a link meant to be read off a screen.
   const section = (process.argv[3] ?? '').replace(/[^a-z]/g, '')
-  const prefix = section && section !== 'appareils' ? `${section}&` : ''
+  const prefix = section && section !== 'activite' ? `${section}&` : ''
   const fragment = `#${prefix}login=${token}`
   console.log(base ? `${base}/${fragment}` : fragment)
   if (!base) console.log("Ajoutez l'adresse de l'interface devant, ou passez-la en argument.")

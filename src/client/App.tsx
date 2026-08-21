@@ -62,12 +62,12 @@ export const api = async (url: string, init?: RequestInit) => {
   return body
 }
 
-const TABS = ['appareils', 'activite', 'wireguard', 'applications', 'parametres'] as const
+const TABS = ['activite', 'appareils', 'wireguard', 'applications', 'parametres'] as const
 type Tab = (typeof TABS)[number]
 
 const TAB_LABELS: Record<Tab, string> = {
+  activite: 'Vue d’ensemble',
   appareils: 'Appareils',
-  activite: 'Activité',
   wireguard: 'WireGuard',
   applications: 'Applications',
   parametres: 'Paramètres',
@@ -80,7 +80,7 @@ export default function App() {
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [tab, setTab] = useHashTab<Tab>(TABS, 'appareils')
+  const [tab, setTab] = useHashTab<Tab>(TABS, 'activite')
 
   const refresh = useCallback(async () => {
     try {
@@ -498,7 +498,7 @@ function ActivityTab() {
 
       <section>
         <h2 className="mb-3 px-1 text-sm font-medium tracking-wide text-on-surface-variant uppercase">
-          {t('Par où ça sort')}
+          {t('Sorties')}
         </h2>
         {live.routes.length ? (
           <ul className="flex flex-col gap-3">

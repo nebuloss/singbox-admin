@@ -750,6 +750,8 @@ app.post('/api/password', requireAuth, (req, res) => {
  * so it lives briefly and dies on first use, whether that use succeeds or not.
  */
 const LINK_TTL = Number(process.env.LINK_MINUTES ?? 10) * 60_000
+/** Where a link with no section named lands, which the interface decides. */
+const LANDING_TAB = 'activite'
 
 app.post('/api/session/link', requireAuth, async (req, res) => {
   // A hundred and twenty-eight random bits, far past guessing for something
@@ -766,7 +768,7 @@ app.post('/api/session/link', requireAuth, async (req, res) => {
   // The default page is the one an absent section already lands on, so naming
   // it would only make the link longer to read off a screen.
   const section = String(req.body?.section ?? '').replace(/[^a-z]/g, '')
-  const prefix = section && section !== 'appareils' ? `${section}&` : ''
+  const prefix = section && section !== LANDING_TAB ? `${section}&` : ''
   const url = `${proto}://${req.get('host')}/#${prefix}login=${token}`
   res.json({ url, minutes: Math.round(LINK_TTL / 60_000), qr: await QRCode.toString(url, { type: 'svg', margin: 1 }) })
 })
