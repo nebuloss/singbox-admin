@@ -96,6 +96,8 @@ write_config() {
   # A random path acts as a light shared secret: scanners hitting the hostname
   # get a 404 from the reverse proxy instead of finding the inbound.
   ws_path="${WS_PATH:-/$(short)}"
+  # The Clash controller is where the byte counters live. Loopback only, behind
+  # a secret of its own: the interface reads it, nothing else can reach it.
 
   cat > "$CONFIG" <<EOF
 {
@@ -128,6 +130,12 @@ write_config() {
       { "type": "udp", "tag": "dns-public", "server": "1.1.1.1" }
     ],
     "final": "dns-public"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "secret": "$(short)"
+    }
   }
 }
 EOF

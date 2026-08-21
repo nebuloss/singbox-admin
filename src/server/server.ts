@@ -74,6 +74,7 @@ const REFRESH_HOURS = Number(process.env.REFRESH_HOURS ?? 1)
 const ROTATE_EVERY = Number(process.env.ROTATE_MINUTES ?? 10) * 60_000
 const IDLE_RETIRE = Number(process.env.RETIRE_IDLE_MINUTES ?? 15) * 60_000
 const SWEEP_EVERY = Number(process.env.SWEEP_SECONDS ?? 60) * 1_000
+const LOG_EVERY = Number(process.env.LOG_SECONDS ?? 3) * 1_000
 
 const credential = () => readAdminConfig(ADMIN_CONFIG).password
 const readOnly = () => credential() === null
@@ -105,8 +106,10 @@ type Peer = {
 type Endpoint = { type: string; tag: string; address: string[]; private_key: string; peers: Peer[] }
 type Rule = { ip_cidr?: string[]; outbound?: string; action?: string; server?: string }
 type DnsServer = { type?: string; tag?: string; server?: string; detour?: string }
+type ClashApi = { external_controller?: string; secret?: string }
 type Config = {
   log?: { output?: string; [k: string]: unknown }
+  experimental?: { clash_api?: ClashApi; [k: string]: unknown }
   inbounds?: Inbound[]
   endpoints?: Endpoint[]
   outbounds?: unknown[]
@@ -1267,56 +1270,141 @@ publicApp.listen(PUBLIC_PORT_LISTEN, () => {
 })
 
 /**
- * Who is still using which credential.
+ * Who is using the tunnel, and for what.
  *
- * sing-box names the credential in every connection line — that is the whole
- * reason each one is named after itself. Reading the log costs nothing and adds
- * no surface: no extra listener, no counters to reconcile across reloads.
+ * Two sources, because neither answers alone. sing-box's log names the
+ * credential behind a connection and the port it arrived on; the Clash API
+ * counts the bytes and names the outbound the traffic left by, but never says
+ * whose connection it is. The source port is in both, and it is unique for as
+ * long as the connection is open — that is the join.
  *
  * A predecessor is retired once nothing has used it for a while. The current
  * credential is never retired, however quiet: a device may simply be asleep,
  * and it is the one thing that would lock it out for good.
  */
+
+/** Source port -> the credential that opened it. Pruned as it ages. */
+const bearers = new Map<string, { credential: string; at: number; host: string }>()
+/** Credential -> last time it was seen at all, in memory between sweeps. */
+const lastSeen = new Map<string, number>()
+/** Log id -> source port, waiting for the line that names the credential. */
+const pending = new Map<string, string>()
+
 // Start at the end of the log, not the beginning. Reading what is already
 // there would stamp connections from days ago as happening now, and nothing
 // would ever look idle enough to retire.
 let logOffset = -1
 
-function observeLog(known: Set<string>): Record<string, string> {
-  const seen: Record<string, string> = {}
+// Anchored on the whole message rather than on the shape of what sits between
+// brackets: an identifier is no longer distinctive enough to recognise on
+// sight, and these two lines say exactly where the interesting part is.
+const FROM = /\[(\d+) [^\]]*\] inbound\/\w+\[[^\]]*\]: inbound connection from \S+:(\d+)/
+const WHO = /\[(\d+) [^\]]*\] inbound\/\w+\[[^\]]*\]: \[([^\]]+)\] inbound connection to (\S+)/
+
+function readLog(): void {
   try {
-    const path = readConfig().log?.output
-    if (!path) return seen
-    const size = fs.statSync(path).size
+    const file = readConfig().log?.output
+    if (!file) return
+    const size = fs.statSync(file).size
     if (logOffset < 0) {
       logOffset = size
-      return seen
+      return
     }
     // Truncated or rotated: start over rather than read from beyond the end.
     if (size < logOffset) logOffset = 0
-    if (size === logOffset) return seen
-    const fd = fs.openSync(path, 'r')
+    if (size === logOffset) return
+    const fd = fs.openSync(file, 'r')
     const buf = Buffer.alloc(size - logOffset)
     fs.readSync(fd, buf, 0, buf.length, logOffset)
     fs.closeSync(fd)
     logOffset = size
-    const now = new Date().toISOString()
-    // Matched against the credentials this app knows, not against a shape.
-    // An identifier is no longer distinctive enough to recognise on sight, and
-    // a stray bracket in a log line must not end up in the file for good.
-    for (const m of buf.toString('utf8').matchAll(/\[([A-Za-z0-9_-]{20,40})\]/g))
-      if (known.has(m[1])) seen[m[1]] = now
+
+    const now = Date.now()
+    for (const line of buf.toString('utf8').split('\n')) {
+      const from = FROM.exec(line)
+      if (from) {
+        pending.set(from[1], from[2])
+        continue
+      }
+      const who = WHO.exec(line)
+      if (!who) continue
+      const [, id, credential, host] = who
+      lastSeen.set(credential, now)
+      const port = pending.get(id)
+      if (port === undefined) continue
+      pending.delete(id)
+      bearers.set(port, { credential, at: now, host })
+    }
+
+    // The pair of lines is written together, so anything still unmatched never
+    // will be. A bearer outlives that by long enough to cover a connection the
+    // Clash API is still reporting.
+    if (pending.size > 4096) pending.clear()
+    for (const [port, b] of bearers) if (now - b.at > 30 * 60_000) bearers.delete(port)
   } catch {
     // A missing or unreadable log only means no news, never a reason to retire.
   }
-  return seen
+}
+
+type Connection = {
+  metadata?: { sourcePort?: string; host?: string; destinationIP?: string; type?: string }
+  upload?: number
+  download?: number
+  chains?: string[]
+  start?: string
+}
+type Snapshot = {
+  connections?: Connection[]
+  uploadTotal?: number
+  downloadTotal?: number
+  memory?: number
+}
+
+/**
+ * The live picture, straight from sing-box.
+ *
+ * Read-only and local: the controller listens on loopback and its secret never
+ * leaves this process. Unreachable, it returns nothing at all, so the
+ * interface can say the counters are missing rather than show a busy tunnel as
+ * an idle one.
+ */
+async function clashSnapshot(): Promise<Snapshot | null> {
+  const api = readConfig().experimental?.clash_api
+  if (!api?.external_controller) return null
+  try {
+    const r = await fetch(`http://${api.external_controller}/connections`, {
+      headers: api.secret ? { Authorization: `Bearer ${api.secret}` } : {},
+      signal: AbortSignal.timeout(2_000),
+    })
+    if (!r.ok) return null
+    return (await r.json()) as Snapshot
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Give sing-box a Clash controller if it has none.
+ *
+ * On loopback, with a secret of its own. Without it there is no byte count to
+ * be had: the log says who and where, never how much.
+ */
+async function ensureClashApi(): Promise<void> {
+  const cfg = readConfig()
+  if (cfg.experimental?.clash_api?.external_controller) return
+  cfg.experimental = {
+    ...cfg.experimental,
+    clash_api: { external_controller: '127.0.0.1:9090', secret: newToken() },
+  }
+  await commit(cfg)
+  console.log('clash_api actif sur 127.0.0.1:9090 — compteurs disponibles')
 }
 
 const sweep = () => serialise(sweepNow)
 
 async function sweepNow(): Promise<void> {
-  const fresh = observeLog(
-    new Set(Object.values(readAdminConfig(ADMIN_CONFIG).devices).flatMap((d) => d.uuids)),
+  const fresh = Object.fromEntries(
+    [...lastSeen].map(([credential, at]) => [credential, new Date(at).toISOString()]),
   )
   const now = Date.now()
 
@@ -1392,9 +1480,105 @@ try {
   console.error('adoption:', (e as Error).message)
 }
 
+void ensureClashApi().catch((e) => console.error('clash_api:', (e as Error).message))
+
+// Read often, write rarely: the log is followed every few seconds so the
+// activity view is current, while the file on disk is only touched by the
+// sweep.
+setInterval(readLog, LOG_EVERY)
+
 setInterval(() => {
   void sweep().catch((e) => console.error('balayage:', (e as Error).message))
 }, SWEEP_EVERY)
+
+/**
+ * What is happening right now.
+ *
+ * Every device is listed, busy or not — a view that only showed the connected
+ * ones would leave you unable to tell a quiet device from a broken one. A
+ * connection whose bearer is unknown is counted apart rather than blamed on
+ * someone: the log is followed from the moment this process started, so
+ * anything older than that has no owner here.
+ */
+app.get('/api/activity', requireAuth, async (_req, res) => {
+  try {
+    const snap = await clashSnapshot()
+    const admin = readAdminConfig(ADMIN_CONFIG)
+    const cfg = readConfig()
+
+    const owner = new Map<string, string>()
+    for (const [token, d] of Object.entries(admin.devices))
+      for (const u of d.uuids) owner.set(u, token)
+
+    const blank = () => ({ connections: 0, up: 0, down: 0, hosts: [] as string[] })
+    const perDevice = new Map<string, ReturnType<typeof blank>>()
+    const perRoute = new Map<string, ReturnType<typeof blank>>()
+    const wgTags = new Set(wgEndpoints(cfg).map((e) => e.tag))
+    let unattributed = 0
+
+    for (const c of snap?.connections ?? []) {
+      const up = c.upload ?? 0
+      const down = c.download ?? 0
+      const host = c.metadata?.host || c.metadata?.destinationIP || ''
+
+      // The chain names every outbound the traffic crossed; the one that is a
+      // tunnel is the answer, and its absence means it went out directly.
+      const tag = (c.chains ?? []).find((t) => wgTags.has(t)) ?? 'direct'
+      const route = perRoute.get(tag) ?? blank()
+      route.connections++
+      route.up += up
+      route.down += down
+      perRoute.set(tag, route)
+
+      const bearer = bearers.get(c.metadata?.sourcePort ?? '')
+      const token = bearer && owner.get(bearer.credential)
+      if (!token) {
+        unattributed++
+        continue
+      }
+      const d = perDevice.get(token) ?? blank()
+      d.connections++
+      d.up += up
+      d.down += down
+      if (host && !d.hosts.includes(host) && d.hosts.length < 4) d.hosts.push(host)
+      perDevice.set(token, d)
+    }
+
+    const at = (uuids: string[]): string | null => {
+      const times = uuids
+        .map((u) => lastSeen.get(u) ?? (admin.seen[u] ? Date.parse(admin.seen[u]) : 0))
+        .filter((t) => t > 0)
+      return times.length ? new Date(Math.max(...times)).toISOString() : null
+    }
+
+    res.json({
+      // Without the controller there are no byte counts, and saying so beats
+      // drawing zeroes that look like silence.
+      counters: snap !== null,
+      totals: {
+        up: snap?.uploadTotal ?? 0,
+        down: snap?.downloadTotal ?? 0,
+        connections: snap?.connections?.length ?? 0,
+        unattributed,
+        memory: snap?.memory ?? 0,
+      },
+      devices: Object.entries(admin.devices).map(([token, d]) => ({
+        token,
+        name: d.name,
+        lastSeen: at(d.uuids),
+        ...(perDevice.get(token) ?? blank()),
+      })),
+      routes: [...perRoute].map(([tag, r]) => ({
+        tag,
+        name: tag === 'direct' ? null : (admin.tunnels[wgKey(tag)] ?? wgId(tag)),
+        enabled: tag === 'direct' ? true : isEnabled(tag),
+        ...r,
+      })),
+    })
+  } catch (e) {
+    res.status(500).json({ error: String((e as Error).message) })
+  }
+})
 
 // ── SPA. __dirname is dist-server/ at runtime, so the bundle sits in ../dist.
 const distDir = path.join(__dirname, '..', 'dist')

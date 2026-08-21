@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useHashTab } from './hooks'
 import { useT } from './i18n'
 import {
@@ -62,11 +62,12 @@ export const api = async (url: string, init?: RequestInit) => {
   return body
 }
 
-const TABS = ['appareils', 'wireguard', 'applications', 'parametres'] as const
+const TABS = ['appareils', 'activite', 'wireguard', 'applications', 'parametres'] as const
 type Tab = (typeof TABS)[number]
 
 const TAB_LABELS: Record<Tab, string> = {
   appareils: 'Appareils',
+  activite: 'Activité',
   wireguard: 'WireGuard',
   applications: 'Applications',
   parametres: 'Paramètres',
@@ -245,6 +246,7 @@ export default function App() {
 
       <main className="mx-auto max-w-3xl px-4 pt-6 pb-16 sm:px-6">
         {tab === 'appareils' && <DevicesTab state={state} busy={busy} act={act} />}
+        {tab === 'activite' && <ActivityTab />}
         {tab === 'wireguard' && <WireguardTab wg={state.wireguard} busy={busy} act={act} />}
         {tab === 'applications' && <AppsTab />}
         {tab === 'parametres' && <SettingsTab state={state} busy={busy} act={act} />}
@@ -342,6 +344,198 @@ function DevicesTab({
 }
 
 /** A read-only value with the one button anyone actually wants next to it. */
+type Activity = {
+  counters: boolean
+  totals: { up: number; down: number; connections: number; unattributed: number; memory: number }
+  devices: {
+    token: string
+    name: string
+    lastSeen: string | null
+    connections: number
+    up: number
+    down: number
+    hosts: string[]
+  }[]
+  routes: { tag: string; name: string | null; enabled: boolean; connections: number; up: number; down: number }[]
+}
+
+const UNITS = ['ko', 'Mo', 'Go', 'To']
+
+/** Compact, and never prose: the column header carries the "ago". */
+function since(iso: string | null): string | null {
+  if (!iso) return null
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000)
+  if (s < 60) return `${Math.round(s)} s`
+  if (s < 3600) return `${Math.round(s / 60)} min`
+  if (s < 86400) return `${Math.round(s / 3600)} h`
+  return `${Math.round(s / 86400)} j`
+}
+
+/**
+ * What is happening right now.
+ *
+ * Polled rather than streamed: a few seconds of lag costs nothing here, and a
+ * plain request survives a reverse proxy that a WebSocket would not.
+ */
+function ActivityTab() {
+  const t = useT()
+  // The unit is a word like any other, so the formatter has to be in here.
+  const bytes = (n: number): string => {
+    if (n < 1024) return `${Math.round(n)} ${t('o')}`
+    let v = n / 1024
+    let i = 0
+    while (v >= 1024 && i < UNITS.length - 1) {
+      v /= 1024
+      i++
+    }
+    return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${t(UNITS[i])}`
+  }
+  const [live, setLive] = useState<Activity | null>(null)
+  const [error, setError] = useState('')
+  // Totals are cumulative, so a rate has to be a difference between two reads.
+  const previous = useRef<{ up: number; down: number; at: number } | null>(null)
+  const [rate, setRate] = useState<{ up: number; down: number } | null>(null)
+
+  useEffect(() => {
+    let stopped = false
+    const tick = async () => {
+      try {
+        const a = (await api('/api/activity')) as Activity
+        if (stopped) return
+        const now = Date.now()
+        const before = previous.current
+        if (before && now > before.at) {
+          const dt = (now - before.at) / 1000
+          setRate({
+            up: Math.max(0, (a.totals.up - before.up) / dt),
+            down: Math.max(0, (a.totals.down - before.down) / dt),
+          })
+        }
+        previous.current = { up: a.totals.up, down: a.totals.down, at: now }
+        setLive(a)
+        setError('')
+      } catch (e) {
+        if (!stopped) setError((e as Error).message)
+      }
+    }
+    void tick()
+    const id = setInterval(tick, 3000)
+    return () => {
+      stopped = true
+      clearInterval(id)
+    }
+  }, [])
+
+  if (error) return <Banner tone="error">{error}</Banner>
+  if (!live) return <Empty>{t('Mesure en cours…')}</Empty>
+
+  const busy = [...live.devices].sort(
+    (a, b) => b.connections - a.connections || (b.down + b.up) - (a.down + a.up),
+  )
+
+  return (
+    <div className="flex flex-col gap-6">
+      {!live.counters && (
+        <Banner tone="error">
+          {t('Compteurs indisponibles : sing-box ne répond pas sur son contrôleur local.')}
+        </Banner>
+      )}
+
+      <Card>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+          <Metric label={t('Connexions')} value={String(live.totals.connections)} />
+          <Metric
+            label={t('Débit descendant')}
+            value={rate ? `${bytes(rate.down)}/s` : '—'}
+          />
+          <Metric label={t('Débit montant')} value={rate ? `${bytes(rate.up)}/s` : '—'} />
+          <Metric label={t('Reçu depuis le démarrage')} value={bytes(live.totals.down)} />
+          <Metric label={t('Envoyé depuis le démarrage')} value={bytes(live.totals.up)} />
+          {live.totals.unattributed > 0 && (
+            <Metric
+              label={t('Sans porteur connu')}
+              value={String(live.totals.unattributed)}
+              hint={t('Ouvertes avant que l’interface ne suive le journal.')}
+            />
+          )}
+        </div>
+      </Card>
+
+      <section>
+        <h2 className="mb-3 px-1 text-sm font-medium tracking-wide text-on-surface-variant uppercase">
+          {t('Appareils')} · {live.devices.length}
+        </h2>
+        <ul className="flex flex-col gap-3">
+          {busy.map((d) => (
+            <li
+              key={d.token}
+              className={`rounded-[var(--radius-md3-xl)] p-4 ${
+                d.connections ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container'
+              }`}
+            >
+              <div className="flex items-baseline justify-between gap-3">
+                <p className="min-w-0 font-medium break-words">{d.name ?? t('sans nom')}</p>
+                <span className="shrink-0 text-sm">
+                  {d.connections
+                    ? `${d.connections} ${t('connexion(s)')}`
+                    : (since(d.lastSeen) ?? t('jamais'))}
+                </span>
+              </div>
+              {(d.connections > 0 || d.lastSeen) && (
+                <p className="mt-1 text-xs opacity-80">
+                  {d.connections > 0 && `↓ ${bytes(d.down)}  ↑ ${bytes(d.up)}`}
+                  {d.connections > 0 && d.lastSeen && ' · '}
+                  {d.lastSeen && `${t('vu il y a')} ${since(d.lastSeen)}`}
+                </p>
+              )}
+              {d.hosts.length > 0 && (
+                <p className="mt-1 truncate font-mono text-xs opacity-70">{d.hosts.join('  ')}</p>
+              )}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section>
+        <h2 className="mb-3 px-1 text-sm font-medium tracking-wide text-on-surface-variant uppercase">
+          {t('Par où ça sort')}
+        </h2>
+        {live.routes.length ? (
+          <ul className="flex flex-col gap-3">
+            {live.routes.map((r) => (
+              <li key={r.tag} className="rounded-[var(--radius-md3-xl)] bg-surface-container p-4">
+                <div className="flex items-baseline justify-between gap-3">
+                  <p className="min-w-0 font-medium break-words">
+                    {r.name ?? t('directement, sans tunnel')}
+                  </p>
+                  <span className="shrink-0 text-sm text-on-surface-variant">
+                    {r.connections} {t('connexion(s)')}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-on-surface-variant">
+                  ↓ {bytes(r.down)}  ↑ {bytes(r.up)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <Empty>{t('Rien ne traverse en ce moment.')}</Empty>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div>
+      <p className="text-xs text-on-surface-variant">{label}</p>
+      <p className="mt-0.5 text-xl leading-7 font-medium tabular-nums">{value}</p>
+      {hint && <p className="mt-0.5 text-[11px] leading-tight text-on-surface-variant">{hint}</p>}
+    </div>
+  )
+}
+
 function Copyable({
   label,
   value,

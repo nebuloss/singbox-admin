@@ -61,6 +61,31 @@ const EN: Record<string, string> = {
     'Plain link — for a client that only understands links',
   Copié: 'Copied',
 
+  // Activité
+  Activité: 'Activity',
+  'Mesure en cours…': 'Measuring…',
+  'Compteurs indisponibles : sing-box ne répond pas sur son contrôleur local.':
+    'Counters unavailable: sing-box is not answering on its local controller.',
+  Connexions: 'Connections',
+  'Débit descendant': 'Down',
+  'Débit montant': 'Up',
+  'Reçu depuis le démarrage': 'Received since start',
+  'Envoyé depuis le démarrage': 'Sent since start',
+  'Sans porteur connu': 'No known bearer',
+  'Ouvertes avant que l’interface ne suive le journal.':
+    'Opened before the interface began following the log.',
+  'connexion(s)': 'connection(s)',
+  jamais: 'never',
+  'vu il y a': 'seen',
+  'Par où ça sort': 'Where it leaves by',
+  'directement, sans tunnel': 'directly, no tunnel',
+  'Rien ne traverse en ce moment.': 'Nothing is going through right now.',
+  o: 'B',
+  ko: 'kB',
+  Mo: 'MB',
+  Go: 'GB',
+  To: 'TB',
+
   // WireGuard
   'Sortie par un tunnel': 'Route through a tunnel',
   'Le trafic ressort directement par cette machine.':
