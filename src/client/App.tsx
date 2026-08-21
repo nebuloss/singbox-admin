@@ -344,24 +344,29 @@ function DevicesTab({
 }
 
 /** A read-only value with the one button anyone actually wants next to it. */
+type LiveConnection = {
+  token: string | null
+  host: string
+  port: string
+  up: number
+  down: number
+  route: string | null
+  start: string | null
+}
 type Activity = {
   counters: boolean
   totals: { up: number; down: number; connections: number; unattributed: number; memory: number }
-  devices: {
-    token: string
-    name: string
-    lastSeen: string | null
-    connections: number
-    up: number
-    down: number
-    hosts: string[]
-  }[]
+  devices: { token: string; name: string; lastSeen: string | null; connections: number; up: number; down: number }[]
   routes: { tag: string; name: string | null; enabled: boolean; connections: number; up: number; down: number }[]
+  live: LiveConnection[]
+  truncated: boolean
 }
 
 const UNITS = ['ko', 'Mo', 'Go', 'To']
+/** Roughly a minute of history at one reading every three seconds. */
+const TREND = 20
 
-/** Compact, and never prose: the column header carries the "ago". */
+/** Compact, and never prose: the column it sits under carries the "ago". */
 function since(iso: string | null): string | null {
   if (!iso) return null
   const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000)
@@ -369,6 +374,47 @@ function since(iso: string | null): string | null {
   if (s < 3600) return `${Math.round(s / 60)} min`
   if (s < 86400) return `${Math.round(s / 3600)} h`
   return `${Math.round(s / 86400)} j`
+}
+
+/**
+ * A minute of throughput behind the current figure.
+ *
+ * One series, so no legend: the figure beside it says what it is. The past is
+ * drawn back, the present is the dot — enough to tell a spike from a plateau,
+ * which is the only question a number alone cannot answer.
+ */
+function Spark({ points }: { points: number[] }) {
+  if (points.length < 3) return <div className="h-10 w-28" />
+  const w = 112
+  const h = 40
+  const peak = Math.max(...points, 1)
+  const x = (i: number) => 4 + (i * (w - 8)) / (points.length - 1)
+  const y = (v: number) => h - 6 - (v / peak) * (h - 12)
+  const d = points.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="h-10 w-28 shrink-0 text-primary" aria-hidden>
+      <path
+        d={d}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.35"
+      />
+      <circle cx={x(points.length - 1)} cy={y(points[points.length - 1])} r="4" fill="currentColor" />
+    </svg>
+  )
+}
+
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div>
+      <p className="text-xs text-on-surface-variant">{label}</p>
+      <p className="mt-0.5 text-lg leading-6 font-medium">{value}</p>
+      {hint && <p className="mt-0.5 text-[11px] leading-tight text-on-surface-variant">{hint}</p>}
+    </div>
+  )
 }
 
 /**
@@ -390,11 +436,14 @@ function ActivityTab() {
     }
     return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${t(UNITS[i])}`
   }
+
   const [live, setLive] = useState<Activity | null>(null)
   const [error, setError] = useState('')
+  const [open, setOpen] = useState<string | null>(null)
   // Totals are cumulative, so a rate has to be a difference between two reads.
   const previous = useRef<{ up: number; down: number; at: number } | null>(null)
   const [rate, setRate] = useState<{ up: number; down: number } | null>(null)
+  const [trend, setTrend] = useState<number[]>([])
 
   useEffect(() => {
     let stopped = false
@@ -406,10 +455,12 @@ function ActivityTab() {
         const before = previous.current
         if (before && now > before.at) {
           const dt = (now - before.at) / 1000
-          setRate({
+          const next = {
             up: Math.max(0, (a.totals.up - before.up) / dt),
             down: Math.max(0, (a.totals.down - before.down) / dt),
-          })
+          }
+          setRate(next)
+          setTrend((p) => [...p, next.down].slice(-TREND))
         }
         previous.current = { up: a.totals.up, down: a.totals.down, at: now }
         setLive(a)
@@ -429,9 +480,10 @@ function ActivityTab() {
   if (error) return <Banner tone="error">{error}</Banner>
   if (!live) return <Empty>{t('Mesure en cours…')}</Empty>
 
-  const busy = [...live.devices].sort(
-    (a, b) => b.connections - a.connections || (b.down + b.up) - (a.down + a.up),
+  const devices = [...live.devices].sort(
+    (a, b) => b.connections - a.connections || b.down + b.up - (a.down + a.up),
   )
+  const shown = open ? live.devices.find((d) => d.token === open) : undefined
 
   return (
     <div className="flex flex-col gap-6">
@@ -442,17 +494,26 @@ function ActivityTab() {
       )}
 
       <Card>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <Metric label={t('Connexions')} value={String(live.totals.connections)} />
-          <Metric
-            label={t('Débit descendant')}
-            value={rate ? `${bytes(rate.down)}/s` : '—'}
-          />
-          <Metric label={t('Débit montant')} value={rate ? `${bytes(rate.up)}/s` : '—'} />
-          <Metric label={t('Reçu depuis le démarrage')} value={bytes(live.totals.down)} />
-          <Metric label={t('Envoyé depuis le démarrage')} value={bytes(live.totals.up)} />
+        <div className="flex items-end justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs text-on-surface-variant">{t('Débit descendant')}</p>
+            <p className="mt-1 text-5xl leading-none font-medium break-words">
+              {rate ? bytes(rate.down) : '—'}
+              <span className="ml-1 text-xl font-normal text-on-surface-variant">/s</span>
+            </p>
+            <p className="mt-2 text-sm text-on-surface-variant">
+              {t('Débit montant')} {rate ? `${bytes(rate.up)}/s` : '—'} ·{' '}
+              {live.totals.connections} {t('connexion(s)')}
+            </p>
+          </div>
+          <Spark points={trend} />
+        </div>
+
+        <div className="mt-6 grid grid-cols-2 gap-4 border-t border-outline-variant pt-4 sm:grid-cols-3">
+          <Stat label={t('Reçu depuis le démarrage')} value={bytes(live.totals.down)} />
+          <Stat label={t('Envoyé depuis le démarrage')} value={bytes(live.totals.up)} />
           {live.totals.unattributed > 0 && (
-            <Metric
+            <Stat
               label={t('Sans porteur connu')}
               value={String(live.totals.unattributed)}
               hint={t('Ouvertes avant que l’interface ne suive le journal.')}
@@ -465,32 +526,36 @@ function ActivityTab() {
         <h2 className="mb-3 px-1 text-sm font-medium tracking-wide text-on-surface-variant uppercase">
           {t('Appareils')} · {live.devices.length}
         </h2>
-        <ul className="flex flex-col gap-3">
-          {busy.map((d) => (
-            <li
-              key={d.token}
-              className={`rounded-[var(--radius-md3-xl)] p-4 ${
-                d.connections ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container'
-              }`}
-            >
-              <div className="flex items-baseline justify-between gap-3">
-                <p className="min-w-0 font-medium break-words">{d.name ?? t('sans nom')}</p>
-                <span className="shrink-0 text-sm">
-                  {d.connections
-                    ? `${d.connections} ${t('connexion(s)')}`
-                    : (since(d.lastSeen) ?? t('jamais'))}
+        <ul className="flex flex-col gap-2">
+          {devices.map((d) => (
+            <li key={d.token}>
+              <button
+                type="button"
+                onClick={() => setOpen(d.token)}
+                className={`state-layer flex w-full items-center gap-3 rounded-[var(--radius-md3-xl)] p-4 text-left ${
+                  d.connections
+                    ? 'bg-secondary-container text-on-secondary-container'
+                    : 'bg-surface-container'
+                }`}
+              >
+                <span
+                  className={`size-2 shrink-0 rounded-full ${
+                    d.connections ? 'bg-primary' : 'bg-outline'
+                  }`}
+                  aria-hidden
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium break-words">{d.name ?? t('sans nom')}</span>
+                  <span className="mt-0.5 block text-xs opacity-80 tabular-nums">
+                    {d.connections
+                      ? `↓ ${bytes(d.down)}  ↑ ${bytes(d.up)}`
+                      : `${t('vu il y a')} ${since(d.lastSeen) ?? t('jamais')}`}
+                  </span>
                 </span>
-              </div>
-              {(d.connections > 0 || d.lastSeen) && (
-                <p className="mt-1 text-xs opacity-80">
-                  {d.connections > 0 && `↓ ${bytes(d.down)}  ↑ ${bytes(d.up)}`}
-                  {d.connections > 0 && d.lastSeen && ' · '}
-                  {d.lastSeen && `${t('vu il y a')} ${since(d.lastSeen)}`}
-                </p>
-              )}
-              {d.hosts.length > 0 && (
-                <p className="mt-1 truncate font-mono text-xs opacity-70">{d.hosts.join('  ')}</p>
-              )}
+                <span className="shrink-0 text-sm tabular-nums">
+                  {d.connections || <span className="text-on-surface-variant">{t('inactif')}</span>}
+                </span>
+              </button>
             </li>
           ))}
         </ul>
@@ -501,20 +566,21 @@ function ActivityTab() {
           {t('Sorties')}
         </h2>
         {live.routes.length ? (
-          <ul className="flex flex-col gap-3">
+          <ul className="flex flex-col gap-2">
             {live.routes.map((r) => (
-              <li key={r.tag} className="rounded-[var(--radius-md3-xl)] bg-surface-container p-4">
-                <div className="flex items-baseline justify-between gap-3">
-                  <p className="min-w-0 font-medium break-words">
+              <li
+                key={r.tag}
+                className="flex items-center gap-3 rounded-[var(--radius-md3-xl)] bg-surface-container p-4"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium break-words">
                     {r.name ?? t('directement, sans tunnel')}
-                  </p>
-                  <span className="shrink-0 text-sm text-on-surface-variant">
-                    {r.connections} {t('connexion(s)')}
                   </span>
-                </div>
-                <p className="mt-1 text-xs text-on-surface-variant">
-                  ↓ {bytes(r.down)}  ↑ {bytes(r.up)}
-                </p>
+                  <span className="mt-0.5 block text-xs text-on-surface-variant tabular-nums">
+                    ↓ {bytes(r.down)}  ↑ {bytes(r.up)}
+                  </span>
+                </span>
+                <span className="shrink-0 text-sm tabular-nums">{r.connections}</span>
               </li>
             ))}
           </ul>
@@ -522,17 +588,70 @@ function ActivityTab() {
           <Empty>{t('Rien ne traverse en ce moment.')}</Empty>
         )}
       </section>
+
+      {shown && (
+        <ConnectionsModal
+          name={shown.name ?? t('sans nom')}
+          lastSeen={shown.lastSeen}
+          connections={live.live.filter((c) => c.token === shown.token)}
+          truncated={live.truncated}
+          bytes={bytes}
+          onClose={() => setOpen(null)}
+        />
+      )}
     </div>
   )
 }
 
-function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
+/** One device, connection by connection: where it is talking and by which way out. */
+function ConnectionsModal({
+  name,
+  lastSeen,
+  connections,
+  truncated,
+  bytes,
+  onClose,
+}: {
+  name: string
+  lastSeen: string | null
+  connections: LiveConnection[]
+  truncated: boolean
+  bytes: (n: number) => string
+  onClose: () => void
+}) {
+  const t = useT()
   return (
-    <div>
-      <p className="text-xs text-on-surface-variant">{label}</p>
-      <p className="mt-0.5 text-xl leading-7 font-medium tabular-nums">{value}</p>
-      {hint && <p className="mt-0.5 text-[11px] leading-tight text-on-surface-variant">{hint}</p>}
-    </div>
+    <Modal title={name} onClose={onClose} wide>
+      <p className="mb-4 text-sm text-on-surface-variant">
+        {connections.length
+          ? `${connections.length} ${t('connexion(s)')}`
+          : t('Aucune connexion ouverte en ce moment.')}
+        {lastSeen && ` · ${t('vu il y a')} ${since(lastSeen)}`}
+      </p>
+      {connections.length > 0 && (
+        <ul className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto">
+          {connections.map((c, i) => (
+            <li key={`${c.host}:${c.port}:${i}`} className="rounded-[var(--radius-md3-m)] bg-surface-container p-3">
+              <p className="font-mono text-sm break-all">
+                {c.host}
+                <span className="text-on-surface-variant">:{c.port}</span>
+              </p>
+              <p className="mt-1 flex flex-wrap gap-x-3 text-xs text-on-surface-variant tabular-nums">
+                <span>↓ {bytes(c.down)}</span>
+                <span>↑ {bytes(c.up)}</span>
+                {c.start && <span>{since(c.start)}</span>}
+                <span>{c.route ?? t('directement, sans tunnel')}</span>
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {truncated && (
+        <p className="mt-3 text-xs text-on-surface-variant">
+          {t('Liste tronquée : trop de connexions ouvertes.')}
+        </p>
+      )}
+    </Modal>
   )
 }
 

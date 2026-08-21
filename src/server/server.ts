@@ -752,6 +752,8 @@ app.post('/api/password', requireAuth, (req, res) => {
 const LINK_TTL = Number(process.env.LINK_MINUTES ?? 10) * 60_000
 /** Where a link with no section named lands, which the interface decides. */
 const LANDING_TAB = 'activite'
+/** How many live connections are described one by one before the list is cut. */
+const LIVE_MAX = 300
 
 app.post('/api/session/link', requireAuth, async (req, res) => {
   // A hundred and twenty-eight random bits, far past guessing for something
@@ -1349,7 +1351,13 @@ function readLog(): void {
 }
 
 type Connection = {
-  metadata?: { sourcePort?: string; host?: string; destinationIP?: string; type?: string }
+  metadata?: {
+    sourcePort?: string
+    destinationPort?: string
+    host?: string
+    destinationIP?: string
+    type?: string
+  }
   upload?: number
   download?: number
   chains?: string[]
@@ -1512,16 +1520,25 @@ app.get('/api/activity', requireAuth, async (_req, res) => {
     for (const [token, d] of Object.entries(admin.devices))
       for (const u of d.uuids) owner.set(u, token)
 
-    const blank = () => ({ connections: 0, up: 0, down: 0, hosts: [] as string[] })
+    const blank = () => ({ connections: 0, up: 0, down: 0 })
     const perDevice = new Map<string, ReturnType<typeof blank>>()
     const perRoute = new Map<string, ReturnType<typeof blank>>()
     const wgTags = new Set(wgEndpoints(cfg).map((e) => e.tag))
+    const named = (tag: string) => (tag === 'direct' ? null : (admin.tunnels[wgKey(tag)] ?? wgId(tag)))
+    const live: {
+      token: string | null
+      host: string
+      port: string
+      up: number
+      down: number
+      route: string | null
+      start: string | null
+    }[] = []
     let unattributed = 0
 
     for (const c of snap?.connections ?? []) {
       const up = c.upload ?? 0
       const down = c.download ?? 0
-      const host = c.metadata?.host || c.metadata?.destinationIP || ''
 
       // The chain names every outbound the traffic crossed; the one that is a
       // tunnel is the answer, and its absence means it went out directly.
@@ -1533,17 +1550,28 @@ app.get('/api/activity', requireAuth, async (_req, res) => {
       perRoute.set(tag, route)
 
       const bearer = bearers.get(c.metadata?.sourcePort ?? '')
-      const token = bearer && owner.get(bearer.credential)
-      if (!token) {
-        unattributed++
-        continue
+      const token = (bearer && owner.get(bearer.credential)) ?? null
+      if (!token) unattributed++
+      else {
+        const d = perDevice.get(token) ?? blank()
+        d.connections++
+        d.up += up
+        d.down += down
+        perDevice.set(token, d)
       }
-      const d = perDevice.get(token) ?? blank()
-      d.connections++
-      d.up += up
-      d.down += down
-      if (host && !d.hosts.includes(host) && d.hosts.length < 4) d.hosts.push(host)
-      perDevice.set(token, d)
+
+      // Enough of each connection to answer "what is it doing", and no more:
+      // this list is read every few seconds and grows with the traffic.
+      if (live.length < LIVE_MAX)
+        live.push({
+          token,
+          host: c.metadata?.host || c.metadata?.destinationIP || '',
+          port: c.metadata?.destinationPort ?? '',
+          up,
+          down,
+          route: named(tag),
+          start: c.start ?? null,
+        })
     }
 
     const at = (uuids: string[]): string | null => {
@@ -1572,10 +1600,12 @@ app.get('/api/activity', requireAuth, async (_req, res) => {
       })),
       routes: [...perRoute].map(([tag, r]) => ({
         tag,
-        name: tag === 'direct' ? null : (admin.tunnels[wgKey(tag)] ?? wgId(tag)),
+        name: named(tag),
         enabled: tag === 'direct' ? true : isEnabled(tag),
         ...r,
       })),
+      live,
+      truncated: (snap?.connections?.length ?? 0) > LIVE_MAX,
     })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
