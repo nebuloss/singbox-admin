@@ -1,12 +1,11 @@
 {
   "name": "singbox-admin",
-  "version": "0.1.0",
+  "version": "0.9.0",
   "private": true,
   "description": "Minimal web admin for a sing-box VLESS tunnel: one static Go binary with the interface built in.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -p tsconfig.json && vite build",
-    "start": "go run ./src/server"
+    "build": "tsc -p tsconfig.json && vite build"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
