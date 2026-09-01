@@ -280,7 +280,9 @@ not hygiene.
 ## Build from source
 
 Node builds the interface; Go builds everything that ships. The first step
-writes into `src/server/dist`, which the second compiles into the binary.
+writes into `src/server/dist`, which the second compiles into the binary — in
+that order, and the build says so if you skip it: `go build` on a tree with no
+interface fails with *pattern all:dist: no matching files found*.
 
 ```sh
 npm install

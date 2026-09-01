@@ -24,6 +24,15 @@ import (
 	"time"
 )
 
+/*
+The interface, compiled in.
+
+`dist` is written by `npm run build` and tracked nowhere: if it is missing this
+directive fails the build with "pattern all:dist: no matching files found",
+which is the intended answer. A server with no interface in it is not worth
+producing, so building one is a two-step affair on purpose — the interface
+first, then this.
+*/
 //go:embed all:dist
 var assets embed.FS
 

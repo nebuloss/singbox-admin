@@ -5,6 +5,7 @@ dist-server
 *.log
 *.tar.gz
 # The interface is embedded in the binary, so its build output lives beside the
-# server. The directory itself is tracked: go:embed needs it to exist.
-src/server/dist/*
-!src/server/dist/.gitkeep
+# server. Nothing of it is tracked, not even the directory: a server built
+# without an interface is not a thing worth producing, and go:embed refusing to
+# find it is what says so.
+src/server/dist
