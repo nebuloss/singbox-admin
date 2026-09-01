@@ -1,6 +1,10 @@
 node_modules
-dist
+/dist
 dist-server
 .env
 *.log
 *.tar.gz
+# The interface is embedded in the binary, so its build output lives beside the
+# server. The directory itself is tracked: go:embed needs it to exist.
+src/server/dist/*
+!src/server/dist/.gitkeep
