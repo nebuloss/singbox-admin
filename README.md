@@ -81,10 +81,16 @@ untouched.
 ## How it works
 
 ```
-browser ──► Express ──► /etc/sing-box/config.json
-                   └──► sing-box check      (validate before applying)
-                   └──► rc-service restart  (or systemctl)
+browser ──► one Go binary ──► /etc/sing-box/config.json
+                         └──► sing-box check     (validate before applying)
+                         └──► rc-service reload  (or systemctl)
 ```
+
+The interface is compiled into the binary, so what runs on the host is a single
+static file with no runtime under it and nothing to fetch at install time. The
+sing-box configuration is read as a document rather than into types: it belongs
+to sing-box, it carries keys this app has never heard of, and every one of them
+has to come back out unchanged.
 
 Every write follows the same path: keep a copy of the current file, write the
 new one, run `sing-box check` on it, and restore the copy if the check fails.
@@ -137,8 +143,10 @@ matches the OS process owner, so the rule quietly matches nothing.)
 ## Requirements
 
 - A host already running sing-box with a VLESS inbound using a `ws` transport
-- Node.js 20 or later
-- Alpine Linux (OpenRC) or Debian/Ubuntu (systemd)
+- Alpine Linux (OpenRC) or Debian/Ubuntu (systemd), on x86-64, arm64 or armv7
+
+Nothing else: the binary is static, so the C library on the host is not a
+question and the same file runs on Alpine and on Debian alike.
 
 The app must run **on the sing-box host**: it edits that host's configuration
 file and restarts that host's service.
@@ -271,19 +279,24 @@ not hygiene.
 
 ## Build from source
 
+Node builds the interface; Go builds everything that ships. The first step
+writes into `src/server/dist`, which the second compiles into the binary.
+
 ```sh
 npm install
-npm run build          # -> dist/ (SPA) and dist-server/ (server)
-tar czf singbox-admin.tar.gz dist dist-server package.json package-lock.json
+npm run build                       # the interface -> src/server/dist
+CGO_ENABLED=0 go build -ldflags='-s -w' -o singbox-admin ./src/server
 ```
 
-Then install that archive instead of a release:
+Then install that binary instead of a release:
 
 ```sh
-TARBALL=/tmp/singbox-admin.tar.gz sh install.sh
+BINARY=./singbox-admin sh install.sh
 ```
 
-Pushing a `v*` tag builds and publishes a release through GitHub Actions.
+Pushing a `v*` tag builds `linux/amd64`, `linux/arm64` and `linux/armv7`
+through GitHub Actions and attaches them to the release with their checksums.
+The install script picks the one matching `uname -m`.
 
 ## Configuration
 

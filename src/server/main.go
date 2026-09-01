@@ -27,6 +27,9 @@ import (
 //go:embed all:dist
 var assets embed.FS
 
+// Stamped by the release build; "dev" when built from a working tree.
+var version = "dev"
+
 var (
 	port       = envInt("PORT", 3000)
 	publicPort = envInt("PUBLIC_LISTEN", 3001)
@@ -78,7 +81,7 @@ func main() {
 			signInLink(os.Args[2:])
 			return
 		case "version":
-			fmt.Println("singbox-admin")
+			fmt.Println("singbox-admin " + version)
 			return
 		}
 	}

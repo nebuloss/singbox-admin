@@ -21,15 +21,14 @@ PATH="/usr/local/bin:$PATH"
 export PATH
 
 APP_DIR="${APP_DIR:-/opt/singbox-admin}"
-LINK_JS="$APP_DIR/dist-server/sign-in-link.js"
+APP_BIN="$APP_DIR/singbox-admin"
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
 info()  { printf "${GREEN}[+]${NC} %s\n" "$*"; }
 error() { printf "${RED}[x]${NC} %s\n" "$*"; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || error "a lancer en root"
-[ -f "$LINK_JS" ]    || error "installation introuvable : $LINK_JS"
-command -v node >/dev/null 2>&1 || error "node absent du PATH"
+[ -x "$APP_BIN" ]    || error "installation introuvable : $APP_BIN"
 
 info "Lien de connexion :"
-node "$LINK_JS" "$@"
+"$APP_BIN" sign-in-link "$@"

@@ -19,18 +19,17 @@ export PATH
 
 APP_DIR="${APP_DIR:-/opt/singbox-admin}"
 SERVICE_NAME="${SERVICE_NAME:-singbox-admin}"
-RESET_JS="$APP_DIR/dist-server/reset-password.js"
+APP_BIN="$APP_DIR/singbox-admin"
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
 info()  { printf "${GREEN}[+]${NC} %s\n" "$*"; }
 error() { printf "${RED}[x]${NC} %s\n" "$*"; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || error "a lancer en root"
-[ -f "$RESET_JS" ]   || error "installation introuvable : $RESET_JS"
-command -v node >/dev/null 2>&1 || error "node absent du PATH"
+[ -x "$APP_BIN" ]    || error "installation introuvable : $APP_BIN"
 
 # No argument clears the hash; one argument sets that password.
-node "$RESET_JS" "$@"
+"$APP_BIN" reset-password "$@"
 
 # The hash is read at startup, so the service has to be restarted to see it.
 if command -v rc-service >/dev/null 2>&1; then
